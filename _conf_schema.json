@@ -3,7 +3,7 @@
     "description": "绘图 API 地址",
     "type": "string",
     "default": "",
-    "hint": "填写 OpenAI Chat 兼容的完整地址，通常以 /v1/chat/completions 结尾。"
+    "hint": "填写完整 Chat 地址并以 /v1/chat/completions 结尾；不要只填根地址，也不要在域名后重复写 /。"
   },
   "image_api_key": {
     "description": "绘图 API Key",
@@ -34,7 +34,7 @@
     "description": "优化模型 API 地址",
     "type": "string",
     "default": "",
-    "hint": "填写任意厂商的 OpenAI Chat 兼容完整地址。仅在启用提示词优化时使用。"
+    "hint": "填写完整 Chat 地址并以 /v1/chat/completions 结尾；例如 SiliconFlow： https://api.siliconflow.cn/v1/chat/completions。只填根地址会返回 404。"
   },
   "optimizer_api_key": {
     "description": "优化模型 API Key（可选）",
