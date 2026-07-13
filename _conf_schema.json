@@ -2,7 +2,7 @@
   "image_api_url": {
     "description": "绘图 API 地址",
     "type": "string",
-    "default": "https://aigw.saurlax.com/v1/chat/completions",
+    "default": "",
     "hint": "填写 OpenAI Chat 兼容的完整地址，通常以 /v1/chat/completions 结尾。"
   },
   "image_api_key": {
@@ -15,8 +15,14 @@
   "image_model": {
     "description": "绘图模型",
     "type": "string",
-    "default": "gpt-image-2",
+    "default": "",
     "hint": "填写绘图接口实际提供的模型名。"
+  },
+  "request_timeout_seconds": {
+    "description": "最大等待时间（秒）",
+    "type": "int",
+    "default": 240,
+    "hint": "每次下载参考图、优化提示词或绘图请求的最长等待时间，可填写 1 到 3600。"
   },
   "optimize_prompt": {
     "description": "启用提示词优化",

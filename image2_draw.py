@@ -19,7 +19,7 @@ except ImportError:  # AstrBot includes aiohttp; this keeps pure unit tests impo
 
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
-REQUEST_TIMEOUT_SECONDS = 240
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 240
 
 
 class DrawError(Exception):
@@ -165,6 +165,7 @@ class Image2DrawClient:
         api_url: str,
         api_key: str,
         model: str,
+        request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         optimize_prompt: bool = False,
         optimizer_api_url: str = "",
         optimizer_api_key: str = "",
@@ -173,6 +174,7 @@ class Image2DrawClient:
         self.api_url = api_url.strip()
         self.api_key = api_key.strip()
         self.model = model.strip()
+        self.request_timeout_seconds = int(request_timeout_seconds)
         self.optimize_prompt_enabled = optimize_prompt
         self.optimizer_api_url = optimizer_api_url.strip()
         self.optimizer_api_key = optimizer_api_key.strip()
@@ -183,11 +185,11 @@ class Image2DrawClient:
         prompt: str,
         image_ref: str | None = None,
     ) -> tuple[ImageOutput, str]:
-        self._validate_config()
+        self.validate_config()
         if aiohttp is None:
             raise DrawError("运行环境缺少 aiohttp，无法调用绘图接口。")
 
-        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
+        timeout = aiohttp.ClientTimeout(total=self.request_timeout_seconds)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             final_prompt = prompt
             if self.optimize_prompt_enabled:
@@ -208,13 +210,15 @@ class Image2DrawClient:
 
         return extract_image_output(response), final_prompt
 
-    def _validate_config(self) -> None:
+    def validate_config(self) -> None:
         if not self.api_url:
             raise DrawError("请先在 WebUI 中填写绘图 API 地址。")
         if not self.api_key:
             raise DrawError("请先在 WebUI 中填写绘图 API Key。")
         if not self.model:
             raise DrawError("请先在 WebUI 中填写绘图模型。")
+        if not 1 <= self.request_timeout_seconds <= 3600:
+            raise DrawError("最大等待时间需要在 1 到 3600 秒之间。")
         if self.optimize_prompt_enabled and not all(
             (
                 self.optimizer_api_url,

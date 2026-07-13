@@ -104,6 +104,9 @@ class _SuccessfulClient:
     def __init__(self, **_kwargs):
         pass
 
+    def validate_config(self):
+        pass
+
     async def draw(self, _prompt, _image_ref):
         return ImageOutput("url", "https://example.com/result.png"), "prompt"
 
@@ -128,12 +131,30 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         event = _Event("draw 画一只猫")
         with patch.object(main, "Image2DrawClient", _SuccessfulClient):
             generator = self.plugin.draw(event)
+            started = await anext(generator)
+            self.assertEqual(started.kind, "plain")
+            self.assertEqual(started.value, "开始绘画喵")
+            self.assertFalse(event.stopped)
+
             result = await anext(generator)
             self.assertEqual(result.kind, "url")
             self.assertFalse(event.stopped)
 
             with self.assertRaises(StopAsyncIteration):
                 await anext(generator)
+        self.assertTrue(event.stopped)
+
+    async def test_invalid_config_does_not_send_started_message(self):
+        event = _Event("draw 画一只猫")
+        generator = self.plugin.draw(event)
+
+        result = await anext(generator)
+        self.assertEqual(result.kind, "plain")
+        self.assertTrue(result.value.startswith("绘图失败："))
+        self.assertNotEqual(result.value, "开始绘画喵")
+
+        with self.assertRaises(StopAsyncIteration):
+            await anext(generator)
         self.assertTrue(event.stopped)
 
     async def test_direct_image_falls_back_from_stale_path_to_url(self):

@@ -158,7 +158,7 @@ class ConfigTests(unittest.TestCase):
             optimize_prompt=True,
         )
         with self.assertRaises(DrawError):
-            client._validate_config()
+            client.validate_config()
 
     def test_optimizer_key_can_be_empty(self):
         client = Image2DrawClient(
@@ -169,7 +169,17 @@ class ConfigTests(unittest.TestCase):
             optimizer_api_url="http://127.0.0.1:11434/v1/chat/completions",
             optimizer_model="local-model",
         )
-        client._validate_config()
+        client.validate_config()
+
+    def test_timeout_must_be_in_range(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+            request_timeout_seconds=0,
+        )
+        with self.assertRaises(DrawError):
+            client.validate_config()
 
 
 if __name__ == "__main__":

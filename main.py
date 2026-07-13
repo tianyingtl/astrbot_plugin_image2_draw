@@ -33,6 +33,9 @@ class Image2DrawPlugin(Star):
             api_url=_config_text(self.config, "image_api_url"),
             api_key=_config_text(self.config, "image_api_key"),
             model=_config_text(self.config, "image_model"),
+            request_timeout_seconds=_config_int(
+                self.config, "request_timeout_seconds", 240
+            ),
             optimize_prompt=_config_bool(self.config, "optimize_prompt"),
             optimizer_api_url=_config_text(self.config, "optimizer_api_url"),
             optimizer_api_key=_config_text(self.config, "optimizer_api_key"),
@@ -41,6 +44,8 @@ class Image2DrawPlugin(Star):
 
         try:
             image_ref = await _find_reference_image(event)
+            client.validate_config()
+            yield event.plain_result("开始绘画喵")
             output, _ = await client.draw(prompt, image_ref)
         except DrawError as exc:
             yield event.plain_result(f"绘图失败：{exc}")
@@ -87,3 +92,10 @@ def _config_bool(config: AstrBotConfig, key: str) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on", "开启"}
+
+
+def _config_int(config: AstrBotConfig, key: str, default: int) -> int:
+    try:
+        return int(config.get(key, default))
+    except (TypeError, ValueError):
+        return 0
