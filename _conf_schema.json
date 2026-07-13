@@ -1,0 +1,45 @@
+{
+  "image_api_url": {
+    "description": "绘图 API 地址",
+    "type": "string",
+    "default": "https://aigw.saurlax.com/v1/chat/completions",
+    "hint": "填写 OpenAI Chat 兼容的完整地址，通常以 /v1/chat/completions 结尾。"
+  },
+  "image_api_key": {
+    "description": "绘图 API Key",
+    "type": "string",
+    "default": "",
+    "hint": "只保存在 AstrBot 的插件配置中，不要写进插件源码或公开仓库。",
+    "obvious_hint": true
+  },
+  "image_model": {
+    "description": "绘图模型",
+    "type": "string",
+    "default": "gpt-image-2",
+    "hint": "填写绘图接口实际提供的模型名。"
+  },
+  "optimize_prompt": {
+    "description": "启用提示词优化",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭时直接使用 /draw 后面的原提示词。"
+  },
+  "optimizer_api_url": {
+    "description": "优化模型 API 地址",
+    "type": "string",
+    "default": "",
+    "hint": "填写任意厂商的 OpenAI Chat 兼容完整地址。仅在启用提示词优化时使用。"
+  },
+  "optimizer_api_key": {
+    "description": "优化模型 API Key（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "可以与绘图 Key 不同；本地无鉴权服务可以留空。"
+  },
+  "optimizer_model": {
+    "description": "优化模型",
+    "type": "string",
+    "default": "",
+    "hint": "不限制模型厂商，填写优化接口支持的实际模型名。"
+  }
+}
