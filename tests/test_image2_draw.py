@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import base64
 import unittest
+from unittest.mock import AsyncMock, patch
+
+import image2_draw
 
 from image2_draw import (
     DrawError,
@@ -18,6 +21,31 @@ from image2_draw import (
 
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + (b"test-image" * 20)
+
+
+class _PostResponse:
+    def __init__(self, status, text):
+        self.status = status
+        self._text = text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        return False
+
+    async def text(self):
+        return self._text
+
+
+class _PostSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def post(self, _url, **_kwargs):
+        self.calls += 1
+        return self.responses.pop(0)
 
 
 class PromptTests(unittest.TestCase):
@@ -180,6 +208,161 @@ class ConfigTests(unittest.TestCase):
         )
         with self.assertRaises(DrawError):
             client.validate_config()
+
+    def test_long_prompt_skips_optimizer(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+            optimize_prompt=True,
+            optimizer_max_prompt_length=50,
+        )
+        client.validate_config("猫" * 51)
+        self.assertFalse(client._should_optimize_prompt("猫" * 51))
+        self.assertTrue(client._should_optimize_prompt("猫" * 50))
+
+    def test_prompt_length_ignores_whitespace_and_zero_disables_skip(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+            optimize_prompt=True,
+            optimizer_max_prompt_length=50,
+            optimizer_api_url="https://example.com/v1/chat/completions",
+            optimizer_model="text-model",
+        )
+        self.assertTrue(client._should_optimize_prompt("猫" * 50 + " \n\t"))
+        client.optimizer_max_prompt_length = 0
+        self.assertTrue(client._should_optimize_prompt("猫" * 51))
+
+    def test_retry_count_must_be_in_range(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+            draw_retry_count=4,
+        )
+        with self.assertRaises(DrawError):
+            client.validate_config()
+
+
+class RetryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_retries_502_for_draw(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+        )
+        session = _PostSession(
+            [
+                _PostResponse(502, "channel circuit breaker open"),
+                _PostResponse(200, '{"data": []}'),
+            ]
+        )
+
+        with patch.object(image2_draw.asyncio, "sleep", AsyncMock()) as sleep:
+            result = await client._post_json(
+                session,
+                "https://example.com/v1/chat/completions",
+                "test-key",
+                {},
+                "绘图",
+                retry_count=1,
+            )
+
+        self.assertEqual(result, {"data": []})
+        self.assertEqual(session.calls, 2)
+        sleep.assert_awaited_once_with(2)
+
+    async def test_does_not_retry_other_status_codes(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+        )
+        session = _PostSession([_PostResponse(500, "upstream error")])
+
+        with self.assertRaisesRegex(DrawError, "HTTP 500"):
+            await client._post_json(
+                session,
+                "https://example.com/v1/chat/completions",
+                "test-key",
+                {},
+                "绘图",
+                retry_count=3,
+            )
+
+        self.assertEqual(session.calls, 1)
+
+    async def test_524_warns_about_possible_duplicate_generation(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+        )
+        session = _PostSession([_PostResponse(524, "upstream returned 524")])
+
+        with self.assertRaisesRegex(DrawError, "可能仍在生成"):
+            await client._post_json(
+                session,
+                "https://example.com/v1/chat/completions",
+                "test-key",
+                {},
+                "绘图",
+            )
+
+    async def test_retries_524_when_enabled(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+        )
+        session = _PostSession(
+            [
+                _PostResponse(524, "upstream returned 524"),
+                _PostResponse(200, '{"data": []}'),
+            ]
+        )
+
+        with patch.object(image2_draw.asyncio, "sleep", AsyncMock()) as sleep:
+            result = await client._post_json(
+                session,
+                "https://example.com/v1/chat/completions",
+                "test-key",
+                {},
+                "绘图",
+                retry_count=1,
+            )
+
+        self.assertEqual(result, {"data": []})
+        self.assertEqual(session.calls, 2)
+        sleep.assert_awaited_once_with(2)
+
+    async def test_stops_after_the_configured_retry_count(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+        )
+        session = _PostSession(
+            [
+                _PostResponse(502, "channel circuit breaker open"),
+                _PostResponse(502, "channel circuit breaker open"),
+            ]
+        )
+
+        with patch.object(image2_draw.asyncio, "sleep", AsyncMock()):
+            with self.assertRaisesRegex(DrawError, "已自动重试 1 次"):
+                await client._post_json(
+                    session,
+                    "https://example.com/v1/chat/completions",
+                    "test-key",
+                    {},
+                    "绘图",
+                    retry_count=1,
+                )
+
+        self.assertEqual(session.calls, 2)
 
 
 if __name__ == "__main__":

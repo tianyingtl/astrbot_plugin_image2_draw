@@ -20,6 +20,10 @@ except ImportError:  # AstrBot includes aiohttp; this keeps pure unit tests impo
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 240
+DEFAULT_OPTIMIZER_MAX_PROMPT_LENGTH = 50
+MAX_DRAW_RETRY_COUNT = 3
+DRAW_RETRY_DELAY_SECONDS = 2
+RETRYABLE_DRAW_STATUS_CODES = {502, 524}
 
 
 class DrawError(Exception):
@@ -166,7 +170,9 @@ class Image2DrawClient:
         api_key: str,
         model: str,
         request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        draw_retry_count: int = 0,
         optimize_prompt: bool = False,
+        optimizer_max_prompt_length: int = DEFAULT_OPTIMIZER_MAX_PROMPT_LENGTH,
         optimizer_api_url: str = "",
         optimizer_api_key: str = "",
         optimizer_model: str = "",
@@ -175,7 +181,9 @@ class Image2DrawClient:
         self.api_key = api_key.strip()
         self.model = model.strip()
         self.request_timeout_seconds = int(request_timeout_seconds)
+        self.draw_retry_count = int(draw_retry_count)
         self.optimize_prompt_enabled = optimize_prompt
+        self.optimizer_max_prompt_length = int(optimizer_max_prompt_length)
         self.optimizer_api_url = optimizer_api_url.strip()
         self.optimizer_api_key = optimizer_api_key.strip()
         self.optimizer_model = optimizer_model.strip()
@@ -185,14 +193,14 @@ class Image2DrawClient:
         prompt: str,
         image_ref: str | None = None,
     ) -> tuple[ImageOutput, str]:
-        self.validate_config()
+        self.validate_config(prompt)
         if aiohttp is None:
             raise DrawError("运行环境缺少 aiohttp，无法调用绘图接口。")
 
         timeout = aiohttp.ClientTimeout(total=self.request_timeout_seconds)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             final_prompt = prompt
-            if self.optimize_prompt_enabled:
+            if self._should_optimize_prompt(prompt):
                 final_prompt = await self._optimize_prompt(session, prompt)
 
             image_data_url = None
@@ -206,11 +214,12 @@ class Image2DrawClient:
                 self.api_key,
                 payload,
                 "绘图",
+                retry_count=self.draw_retry_count,
             )
 
         return extract_image_output(response), final_prompt
 
-    def validate_config(self) -> None:
+    def validate_config(self, prompt: str | None = None) -> None:
         if not self.api_url:
             raise DrawError("请先在 WebUI 中填写绘图 API 地址。")
         if not self.api_key:
@@ -219,13 +228,30 @@ class Image2DrawClient:
             raise DrawError("请先在 WebUI 中填写绘图模型。")
         if not 1 <= self.request_timeout_seconds <= 3600:
             raise DrawError("最大等待时间需要在 1 到 3600 秒之间。")
-        if self.optimize_prompt_enabled and not all(
+        if not 0 <= self.draw_retry_count <= MAX_DRAW_RETRY_COUNT:
+            raise DrawError(
+                f"绘图失败重试次数需要在 0 到 {MAX_DRAW_RETRY_COUNT} 之间。"
+            )
+        if self.optimizer_max_prompt_length < 0:
+            raise DrawError("提示词优化最大长度不能小于 0。")
+        should_validate_optimizer = self.optimize_prompt_enabled and (
+            prompt is None or self._should_optimize_prompt(prompt)
+        )
+        if should_validate_optimizer and not all(
             (
                 self.optimizer_api_url,
                 self.optimizer_model,
             )
         ):
             raise DrawError("已开启提示词优化，请完整填写优化接口地址和模型。")
+
+    def _should_optimize_prompt(self, prompt: str) -> bool:
+        if not self.optimize_prompt_enabled:
+            return False
+        if self.optimizer_max_prompt_length == 0:
+            return True
+        prompt_length = len("".join(prompt.split()))
+        return prompt_length <= self.optimizer_max_prompt_length
 
     async def _optimize_prompt(self, session: Any, prompt: str) -> str:
         payload = build_optimizer_request(self.optimizer_model, prompt)
@@ -287,25 +313,43 @@ class Image2DrawClient:
         api_key: str,
         payload: dict[str, Any],
         action: str,
+        retry_count: int = 0,
     ) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        try:
-            async with session.post(url, headers=headers, json=payload) as response:
-                text = await response.text()
-                if response.status < 200 or response.status >= 300:
-                    detail = _response_error_detail(text)
-                    raise DrawError(
-                        f"{action}接口返回 HTTP {response.status}"
-                        + (f"：{detail}" if detail else "。")
-                    )
-        except asyncio.TimeoutError as exc:
-            raise DrawError(f"{action}接口请求超时。") from exc
-        except DrawError:
-            raise
-        except Exception as exc:
-            if aiohttp is not None and isinstance(exc, aiohttp.ClientError):
-                raise DrawError(f"{action}接口连接失败。") from exc
-            raise
+        for attempt in range(retry_count + 1):
+            try:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    text = await response.text()
+                    status = response.status
+            except asyncio.TimeoutError as exc:
+                raise DrawError(f"{action}接口请求超时。") from exc
+            except Exception as exc:
+                if aiohttp is not None and isinstance(exc, aiohttp.ClientError):
+                    raise DrawError(f"{action}接口连接失败。") from exc
+                raise
+
+            if 200 <= status < 300:
+                break
+
+            detail = _response_error_detail(text)
+            if (
+                action == "绘图"
+                and status in RETRYABLE_DRAW_STATUS_CODES
+                and attempt < retry_count
+            ):
+                await asyncio.sleep(DRAW_RETRY_DELAY_SECONDS * (attempt + 1))
+                continue
+
+            message = f"{action}接口返回 HTTP {status}"
+            if action == "绘图" and status == 502:
+                message += "：上游通道暂时不可用，请稍后重试。"
+            elif action == "绘图" and status == 524:
+                message += "：上游处理超时，可能仍在生成；请先确认没有结果后再重试。"
+            else:
+                message += f"：{detail}" if detail else "。"
+            if action == "绘图" and attempt:
+                message += f"（已自动重试 {attempt} 次）"
+            raise DrawError(message)
 
         try:
             parsed = json.loads(text)

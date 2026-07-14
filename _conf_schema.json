@@ -24,11 +24,23 @@
     "default": 240,
     "hint": "每次下载参考图、优化提示词或绘图请求的最长等待时间，可填写 1 到 3600。"
   },
+  "draw_retry_count": {
+    "description": "绘图失败重试次数",
+    "type": "int",
+    "default": 0,
+    "hint": "仅在绘图接口返回 502 或 524 时重试，可填写 0 到 3；重试可能重复生成或计费。"
+  },
   "optimize_prompt": {
     "description": "启用提示词优化",
     "type": "bool",
     "default": false,
     "hint": "关闭时直接使用 /draw 后面的原提示词。"
+  },
+  "optimizer_max_prompt_length": {
+    "description": "提示词优化最大长度（字）",
+    "type": "int",
+    "default": 50,
+    "hint": "启用优化时，超过该长度会跳过优化并直接绘图；中文每字计 1，0 表示永不自动跳过。"
   },
   "optimizer_api_url": {
     "description": "优化模型 API 地址",

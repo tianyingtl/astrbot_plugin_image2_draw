@@ -33,10 +33,16 @@ class _Image:
         self.file = file
 
 
+class _Reply:
+    def __init__(self, *, id):
+        self.id = id
+
+
 class _Result:
     def __init__(self, kind, value=""):
         self.kind = kind
         self.value = value
+        self.chain = []
 
     def base64_image(self, value):
         return _Result("base64", value)
@@ -62,6 +68,7 @@ def _install_astrbot_stubs():
     modules["astrbot.api.event"].AstrMessageEvent = object
     modules["astrbot.api.event"].filter = _Filter()
     modules["astrbot.api.message_components"].Image = _Image
+    modules["astrbot.api.message_components"].Reply = _Reply
     modules["astrbot.api.star"].Context = _Context
     modules["astrbot.api.star"].Star = _Star
 
@@ -83,6 +90,7 @@ class _Event:
         self.message_str = message_str
         self.messages = messages or []
         self.stopped = False
+        self.message_obj = types.SimpleNamespace(message_id="draw-123")
 
     def get_messages(self):
         return self.messages
@@ -104,7 +112,7 @@ class _SuccessfulClient:
     def __init__(self, **_kwargs):
         pass
 
-    def validate_config(self):
+    def validate_config(self, *_args):
         pass
 
     async def draw(self, _prompt, _image_ref):
@@ -134,10 +142,13 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             started = await anext(generator)
             self.assertEqual(started.kind, "plain")
             self.assertEqual(started.value, "开始绘画喵")
+            self.assertEqual(started.chain, [])
             self.assertFalse(event.stopped)
 
             result = await anext(generator)
             self.assertEqual(result.kind, "url")
+            self.assertIsInstance(result.chain[0], _Reply)
+            self.assertEqual(result.chain[0].id, "draw-123")
             self.assertFalse(event.stopped)
 
             with self.assertRaises(StopAsyncIteration):
@@ -152,6 +163,8 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.kind, "plain")
         self.assertTrue(result.value.startswith("绘图失败："))
         self.assertNotEqual(result.value, "开始绘画喵")
+        self.assertIsInstance(result.chain[0], _Reply)
+        self.assertEqual(result.chain[0].id, "draw-123")
 
         with self.assertRaises(StopAsyncIteration):
             await anext(generator)
@@ -174,6 +187,16 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await main._find_reference_image(event)
         self.assertEqual(result, "https://example.com/quoted.png")
+
+
+class ConfigTests(unittest.TestCase):
+    def test_invalid_integer_config_uses_the_field_default(self):
+        self.assertEqual(
+            main._config_int(
+                {"optimizer_max_prompt_length": ""}, "optimizer_max_prompt_length", 50
+            ),
+            50,
+        )
 
 
 if __name__ == "__main__":
