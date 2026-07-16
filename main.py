@@ -80,6 +80,8 @@ class Image2DrawPlugin(Star):
 
         client = _create_client(self.config)
         try:
+            client.validate_optimizer_config()
+            yield event.plain_result("开始优化喵")
             optimized_prompt = await client.optimize(prompt)
         except DrawError as exc:
             yield _reply_to_command_message(

@@ -115,6 +115,9 @@ class _SuccessfulClient:
     def validate_config(self, *_args):
         pass
 
+    def validate_optimizer_config(self):
+        pass
+
     async def draw(self, _prompt, _image_ref):
         return ImageOutput("url", "https://example.com/result.png"), "prompt"
 
@@ -177,6 +180,11 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         event = _Event("youhua 画一只猫")
         with patch.object(main, "Image2DrawClient", _SuccessfulClient):
             generator = self.plugin.youhua(event)
+            started = await anext(generator)
+            self.assertEqual(started.kind, "plain")
+            self.assertEqual(started.value, "开始优化喵")
+            self.assertEqual(started.chain, [])
+
             result = await anext(generator)
 
         self.assertEqual(result.kind, "plain")
