@@ -1,8 +1,8 @@
 name: astrbot_plugin_image2_draw
 display_name: Image2 绘图
-desc: 使用 OpenAI Chat 兼容的图片模型执行文字绘图和参考图修改
-short_desc: /draw 文字绘图与参考图修改
-version: v1.0.2
+desc: 使用 OpenAI Chat 兼容接口绘图、参考图修改和优化提示词
+short_desc: /draw 绘图与 /youhua 提示词优化
+version: v1.0.3
 author: tianying
 repo: "https://github.com/tianyingtl/astrbot_plugin_image2_draw"
 astrbot_version: ">=4.24.4"

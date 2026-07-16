@@ -44,6 +44,14 @@ def extract_draw_prompt(message: str | None) -> str:
     return text
 
 
+def extract_youhua_prompt(message: str | None) -> str:
+    text = (message or "").strip()
+    match = re.match(r"^[／/]?youhua(?:\s+|$)(.*)$", text, re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return text
+
+
 def build_draw_request(
     model: str,
     prompt: str,
@@ -219,9 +227,19 @@ class Image2DrawClient:
 
         return extract_image_output(response), final_prompt
 
+    async def optimize(self, prompt: str) -> str:
+        self.validate_optimizer_config()
+        if aiohttp is None:
+            raise DrawError("运行环境缺少 aiohttp，无法调用提示词优化接口。")
+
+        timeout = aiohttp.ClientTimeout(total=self.request_timeout_seconds)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            return await self._optimize_prompt(session, prompt)
+
     def validate_config(self, prompt: str | None = None) -> None:
         if not self.api_url:
             raise DrawError("请先在 WebUI 中填写绘图 API 地址。")
+        _validate_chat_api_url(self.api_url, "绘图 API")
         if not self.api_key:
             raise DrawError("请先在 WebUI 中填写绘图 API Key。")
         if not self.model:
@@ -237,13 +255,15 @@ class Image2DrawClient:
         should_validate_optimizer = self.optimize_prompt_enabled and (
             prompt is None or self._should_optimize_prompt(prompt)
         )
-        if should_validate_optimizer and not all(
-            (
-                self.optimizer_api_url,
-                self.optimizer_model,
-            )
-        ):
-            raise DrawError("已开启提示词优化，请完整填写优化接口地址和模型。")
+        if should_validate_optimizer:
+            self.validate_optimizer_config()
+
+    def validate_optimizer_config(self) -> None:
+        if not 1 <= self.request_timeout_seconds <= 3600:
+            raise DrawError("最大等待时间需要在 1 到 3600 秒之间。")
+        if not self.optimizer_api_url or not self.optimizer_model:
+            raise DrawError("请先在 WebUI 中完整填写优化接口地址和模型。")
+        _validate_chat_api_url(self.optimizer_api_url, "优化接口")
 
     def _should_optimize_prompt(self, prompt: str) -> bool:
         if not self.optimize_prompt_enabled:
@@ -363,6 +383,16 @@ class Image2DrawClient:
         if not isinstance(parsed, dict):
             raise DrawError(f"{action}接口返回格式不正确。")
         return parsed
+
+
+def _validate_chat_api_url(url: str, label: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise DrawError(f"{label}地址格式不正确。")
+    if "//" in parsed.path or not parsed.path.endswith("/v1/chat/completions"):
+        raise DrawError(
+            f"{label}地址应以 /v1/chat/completions 结尾，且域名后不能重复写 /。"
+        )
 
 
 def _find_image_output(value: Any) -> ImageOutput | None:

@@ -34,7 +34,7 @@
     "description": "启用提示词优化",
     "type": "bool",
     "default": false,
-    "hint": "关闭时直接使用 /draw 后面的原提示词。"
+    "hint": "只控制 /draw 的自动优化；/youhua 会始终调用优化接口。"
   },
   "optimizer_max_prompt_length": {
     "description": "提示词优化最大长度（字）",
@@ -46,7 +46,7 @@
     "description": "优化模型 API 地址",
     "type": "string",
     "default": "",
-    "hint": "填写完整 Chat 地址并以 /v1/chat/completions 结尾；例如 SiliconFlow： https://api.siliconflow.cn/v1/chat/completions。只填根地址会返回 404。"
+    "hint": "供 /draw 自动优化和 /youhua 使用。填写完整 Chat 地址并以 /v1/chat/completions 结尾；例如 SiliconFlow： https://api.siliconflow.cn/v1/chat/completions。只填根地址会返回 404。"
   },
   "optimizer_api_key": {
     "description": "优化模型 API Key（可选）",
@@ -58,6 +58,6 @@
     "description": "优化模型",
     "type": "string",
     "default": "",
-    "hint": "不限制模型厂商，填写优化接口支持的实际模型名。"
+    "hint": "供 /draw 自动优化和 /youhua 使用，填写优化接口支持的实际模型名。"
   }
 }

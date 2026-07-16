@@ -118,6 +118,9 @@ class _SuccessfulClient:
     async def draw(self, _prompt, _image_ref):
         return ImageOutput("url", "https://example.com/result.png"), "prompt"
 
+    async def optimize(self, _prompt):
+        return "优化后的提示词"
+
 
 class HandlerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -165,6 +168,46 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(result.value, "开始绘画喵")
         self.assertIsInstance(result.chain[0], _Reply)
         self.assertEqual(result.chain[0].id, "draw-123")
+
+        with self.assertRaises(StopAsyncIteration):
+            await anext(generator)
+        self.assertTrue(event.stopped)
+
+    async def test_youhua_result_replies_to_the_command(self):
+        event = _Event("youhua 画一只猫")
+        with patch.object(main, "Image2DrawClient", _SuccessfulClient):
+            generator = self.plugin.youhua(event)
+            result = await anext(generator)
+
+        self.assertEqual(result.kind, "plain")
+        self.assertEqual(result.value, "优化后的提示词：\n优化后的提示词")
+        self.assertIsInstance(result.chain[0], _Reply)
+        self.assertEqual(result.chain[0].id, "draw-123")
+
+        with self.assertRaises(StopAsyncIteration):
+            await anext(generator)
+        self.assertTrue(event.stopped)
+
+    async def test_youhua_error_replies_to_the_command(self):
+        event = _Event("youhua 画一只猫")
+        generator = self.plugin.youhua(event)
+
+        result = await anext(generator)
+        self.assertEqual(result.kind, "plain")
+        self.assertTrue(result.value.startswith("提示词优化失败："))
+        self.assertIsInstance(result.chain[0], _Reply)
+        self.assertEqual(result.chain[0].id, "draw-123")
+
+        with self.assertRaises(StopAsyncIteration):
+            await anext(generator)
+        self.assertTrue(event.stopped)
+
+    async def test_youhua_usage_stops_after_the_result(self):
+        event = _Event("youhua")
+        generator = self.plugin.youhua(event)
+
+        result = await anext(generator)
+        self.assertEqual(result.value, "用法：/youhua <想优化的提示词>。")
 
         with self.assertRaises(StopAsyncIteration):
             await anext(generator)

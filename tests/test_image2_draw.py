@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import types
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -13,6 +14,7 @@ from image2_draw import (
     build_optimizer_request,
     detect_image_mime,
     extract_draw_prompt,
+    extract_youhua_prompt,
     extract_image_output,
     image_bytes_to_data_url,
     parse_optimizer_response,
@@ -47,6 +49,12 @@ class _PostSession:
         self.calls += 1
         return self.responses.pop(0)
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        return False
+
 
 class PromptTests(unittest.TestCase):
     def test_extracts_full_prompt(self):
@@ -60,6 +68,12 @@ class PromptTests(unittest.TestCase):
 
     def test_accepts_already_stripped_message(self):
         self.assertEqual(extract_draw_prompt("改成红色"), "改成红色")
+
+    def test_extracts_youhua_prompt(self):
+        self.assertEqual(
+            extract_youhua_prompt("/youhua 画一只戴耳机的白猫"),
+            "画一只戴耳机的白猫",
+        )
 
 
 class RequestTests(unittest.TestCase):
@@ -245,6 +259,46 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(DrawError):
             client.validate_config()
 
+    def test_explicit_optimizer_does_not_require_drawing_config(self):
+        client = Image2DrawClient(
+            api_url="",
+            api_key="",
+            model="",
+            optimizer_api_url="https://example.com/v1/chat/completions",
+            optimizer_model="text-model",
+        )
+        client.validate_optimizer_config()
+
+    def test_explicit_optimizer_requires_its_own_config(self):
+        client = Image2DrawClient(api_url="", api_key="", model="")
+        with self.assertRaises(DrawError):
+            client.validate_optimizer_config()
+
+    def test_optimizer_requires_a_complete_chat_endpoint(self):
+        for api_url in (
+            "https://api.example.com/",
+            "https://api.example.com//v1/chat/completions",
+        ):
+            with self.subTest(api_url=api_url):
+                client = Image2DrawClient(
+                    api_url="",
+                    api_key="",
+                    model="",
+                    optimizer_api_url=api_url,
+                    optimizer_model="text-model",
+                )
+                with self.assertRaisesRegex(DrawError, "v1/chat/completions"):
+                    client.validate_optimizer_config()
+
+    def test_draw_requires_a_complete_chat_endpoint(self):
+        client = Image2DrawClient(
+            api_url="https://api.example.com//v1/chat/completions",
+            api_key="test-key",
+            model="image-model",
+        )
+        with self.assertRaisesRegex(DrawError, "v1/chat/completions"):
+            client.validate_config()
+
 
 class RetryTests(unittest.IsolatedAsyncioTestCase):
     async def test_retries_502_for_draw(self):
@@ -363,6 +417,32 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(session.calls, 2)
+
+
+class OptimizerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_optimizer_ignores_draw_settings_and_length_limit(self):
+        client = Image2DrawClient(
+            api_url="",
+            api_key="",
+            model="",
+            optimize_prompt=False,
+            optimizer_max_prompt_length=50,
+            optimizer_api_url="https://example.com/v1/chat/completions",
+            optimizer_model="text-model",
+        )
+        session = _PostSession(
+            [_PostResponse(200, '{"choices": [{"message": {"content": "优化结果"}}]}')]
+        )
+        aiohttp_stub = types.SimpleNamespace(
+            ClientTimeout=lambda **_kwargs: object(),
+            ClientSession=lambda **_kwargs: session,
+        )
+
+        with patch.object(image2_draw, "aiohttp", aiohttp_stub):
+            result = await client.optimize("猫" * 51)
+
+        self.assertEqual(result, "优化结果")
+        self.assertEqual(session.calls, 1)
 
 
 if __name__ == "__main__":

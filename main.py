@@ -9,9 +9,19 @@ from astrbot.api.star import Context, Star
 from astrbot.core.utils.quoted_message_parser import extract_quoted_message_images
 
 try:
-    from .image2_draw import DrawError, Image2DrawClient, extract_draw_prompt
+    from .image2_draw import (
+        DrawError,
+        Image2DrawClient,
+        extract_draw_prompt,
+        extract_youhua_prompt,
+    )
 except ImportError:
-    from image2_draw import DrawError, Image2DrawClient, extract_draw_prompt
+    from image2_draw import (
+        DrawError,
+        Image2DrawClient,
+        extract_draw_prompt,
+        extract_youhua_prompt,
+    )
 
 
 class Image2DrawPlugin(Star):
@@ -29,22 +39,7 @@ class Image2DrawPlugin(Star):
             event.stop_event()
             return
 
-        client = Image2DrawClient(
-            api_url=_config_text(self.config, "image_api_url"),
-            api_key=_config_text(self.config, "image_api_key"),
-            model=_config_text(self.config, "image_model"),
-            request_timeout_seconds=_config_int(
-                self.config, "request_timeout_seconds", 240
-            ),
-            draw_retry_count=_config_int(self.config, "draw_retry_count", 0),
-            optimize_prompt=_config_bool(self.config, "optimize_prompt"),
-            optimizer_max_prompt_length=_config_int(
-                self.config, "optimizer_max_prompt_length", 50
-            ),
-            optimizer_api_url=_config_text(self.config, "optimizer_api_url"),
-            optimizer_api_key=_config_text(self.config, "optimizer_api_key"),
-            optimizer_model=_config_text(self.config, "optimizer_model"),
-        )
+        client = _create_client(self.config)
 
         try:
             image_ref = await _find_reference_image(event)
@@ -52,12 +47,14 @@ class Image2DrawPlugin(Star):
             yield event.plain_result("开始绘画喵")
             output, _ = await client.draw(prompt, image_ref)
         except DrawError as exc:
-            yield _reply_to_draw_message(event, event.plain_result(f"绘图失败：{exc}"))
+            yield _reply_to_command_message(
+                event, event.plain_result(f"绘图失败：{exc}")
+            )
             event.stop_event()
             return
         except Exception:
             logger.exception("Image2 绘图插件处理请求失败")
-            yield _reply_to_draw_message(
+            yield _reply_to_command_message(
                 event,
                 event.plain_result(
                     "绘图失败：插件处理请求时发生异常，请查看 AstrBot 日志。"
@@ -70,7 +67,40 @@ class Image2DrawPlugin(Star):
             result = event.make_result().base64_image(output.value)
         else:
             result = event.image_result(output.value)
-        yield _reply_to_draw_message(event, result)
+        yield _reply_to_command_message(event, result)
+        event.stop_event()
+
+    @filter.command("youhua")
+    async def youhua(self, event: AstrMessageEvent):
+        prompt = extract_youhua_prompt(getattr(event, "message_str", ""))
+        if not prompt:
+            yield event.plain_result("用法：/youhua <想优化的提示词>。")
+            event.stop_event()
+            return
+
+        client = _create_client(self.config)
+        try:
+            optimized_prompt = await client.optimize(prompt)
+        except DrawError as exc:
+            yield _reply_to_command_message(
+                event, event.plain_result(f"提示词优化失败：{exc}")
+            )
+            event.stop_event()
+            return
+        except Exception:
+            logger.exception("Image2 绘图插件优化提示词时发生异常")
+            yield _reply_to_command_message(
+                event,
+                event.plain_result(
+                    "提示词优化失败：插件处理请求时发生异常，请查看 AstrBot 日志。"
+                ),
+            )
+            event.stop_event()
+            return
+
+        yield _reply_to_command_message(
+            event, event.plain_result(f"优化后的提示词：\n{optimized_prompt}")
+        )
         event.stop_event()
 
 
@@ -91,12 +121,29 @@ async def _find_reference_image(event: AstrMessageEvent) -> str | None:
     return None
 
 
-def _reply_to_draw_message(event: AstrMessageEvent, result):
+def _reply_to_command_message(event: AstrMessageEvent, result):
     message_obj = getattr(event, "message_obj", None)
     message_id = getattr(message_obj, "message_id", None)
     if message_id:
         result.chain.insert(0, Reply(id=message_id))
     return result
+
+
+def _create_client(config: AstrBotConfig) -> Image2DrawClient:
+    return Image2DrawClient(
+        api_url=_config_text(config, "image_api_url"),
+        api_key=_config_text(config, "image_api_key"),
+        model=_config_text(config, "image_model"),
+        request_timeout_seconds=_config_int(config, "request_timeout_seconds", 240),
+        draw_retry_count=_config_int(config, "draw_retry_count", 0),
+        optimize_prompt=_config_bool(config, "optimize_prompt"),
+        optimizer_max_prompt_length=_config_int(
+            config, "optimizer_max_prompt_length", 50
+        ),
+        optimizer_api_url=_config_text(config, "optimizer_api_url"),
+        optimizer_api_key=_config_text(config, "optimizer_api_key"),
+        optimizer_model=_config_text(config, "optimizer_model"),
+    )
 
 
 def _config_text(config: AstrBotConfig, key: str) -> str:
