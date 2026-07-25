@@ -11,6 +11,7 @@ from image2_draw import (
     DrawError,
     Image2DrawClient,
     build_draw_request,
+    build_openai_images_request,
     build_optimizer_request,
     detect_image_mime,
     extract_draw_prompt,
@@ -94,6 +95,16 @@ class RequestTests(unittest.TestCase):
         self.assertEqual(
             content[1]["image_url"]["url"],
             "data:image/png;base64,AAAA",
+        )
+
+    def test_builds_openai_images_request(self):
+        payload = build_openai_images_request("gpt-image-2", "画一只猫")
+        self.assertEqual(
+            payload,
+            {
+                "model": "gpt-image-2",
+                "prompt": "画一只猫",
+            },
         )
 
     def test_optimizer_does_not_restrict_model_vendor(self):
@@ -274,29 +285,62 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(DrawError):
             client.validate_optimizer_config()
 
-    def test_optimizer_requires_a_complete_chat_endpoint(self):
-        for api_url in (
-            "https://api.example.com/",
-            "https://api.example.com//v1/chat/completions",
-        ):
-            with self.subTest(api_url=api_url):
-                client = Image2DrawClient(
-                    api_url="",
-                    api_key="",
-                    model="",
-                    optimizer_api_url=api_url,
-                    optimizer_model="text-model",
-                )
-                with self.assertRaisesRegex(DrawError, "v1/chat/completions"):
-                    client.validate_optimizer_config()
-
-    def test_draw_requires_a_complete_chat_endpoint(self):
+    def test_api_urls_are_used_without_rewrite(self):
         client = Image2DrawClient(
-            api_url="https://api.example.com//v1/chat/completions",
+            api_url="https://api.example.com/",
+            api_key="test-key",
+            model="image-model",
+            optimizer_api_url="https://optimizer.example.com/custom/chat",
+            optimizer_model="text-model",
+        )
+        self.assertEqual(client.api_url, "https://api.example.com/")
+        self.assertEqual(
+            client.optimizer_api_url,
+            "https://optimizer.example.com/custom/chat",
+        )
+        client.validate_config()
+        client.validate_optimizer_config()
+
+    def test_openai_images_protocol_accepts_images_generation_endpoint(self):
+        client = Image2DrawClient(
+            api_url="https://gateway.example.com/v1/images/generations",
+            api_key="test-key",
+            model="gpt-image-2",
+            draw_protocol="openai_images",
+        )
+        self.assertEqual(
+            client.api_url,
+            "https://gateway.example.com/v1/images/generations",
+        )
+        client.validate_config()
+
+    def test_openai_images_protocol_rejects_reference_image(self):
+        client = Image2DrawClient(
+            api_url="https://gateway.example.com/v1/images/generations",
+            api_key="test-key",
+            model="gpt-image-2",
+            draw_protocol="openai_images",
+        )
+        with self.assertRaisesRegex(DrawError, "不支持参考图"):
+            client.validate_config("改图", True)
+
+    def test_rejects_unknown_draw_protocol(self):
+        client = Image2DrawClient(
+            api_url="https://gateway.example.com/draw",
+            api_key="test-key",
+            model="image-model",
+            draw_protocol="unknown",
+        )
+        with self.assertRaisesRegex(DrawError, "绘图接口协议"):
+            client.validate_config()
+
+    def test_rejects_non_http_api_url(self):
+        client = Image2DrawClient(
+            api_url="api.example.com/v1/chat/completions",
             api_key="test-key",
             model="image-model",
         )
-        with self.assertRaisesRegex(DrawError, "v1/chat/completions"):
+        with self.assertRaisesRegex(DrawError, "地址格式不正确"):
             client.validate_config()
 
 

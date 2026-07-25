@@ -176,6 +176,28 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             await anext(generator)
         self.assertTrue(event.stopped)
 
+    async def test_openai_images_reference_does_not_send_started_message(self):
+        plugin = main.Image2DrawPlugin(
+            _Context(),
+            {
+                "image_api_url": "https://example.com/v1/images/generations",
+                "image_api_protocol": "openai_images",
+                "image_api_key": "test-key",
+                "image_model": "gpt-image-2",
+            },
+        )
+        event = _Event("draw 改图", [_Image(url="https://example.com/source.png")])
+        generator = plugin.draw(event)
+
+        result = await anext(generator)
+        self.assertEqual(result.kind, "plain")
+        self.assertIn("不支持参考图", result.value)
+        self.assertNotEqual(result.value, "开始绘画喵")
+
+        with self.assertRaises(StopAsyncIteration):
+            await anext(generator)
+        self.assertTrue(event.stopped)
+
     async def test_youhua_result_replies_to_the_command(self):
         event = _Event("youhua 画一只猫")
         with patch.object(main, "Image2DrawClient", _SuccessfulClient):

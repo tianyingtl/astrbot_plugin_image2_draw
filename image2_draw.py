@@ -24,6 +24,12 @@ DEFAULT_OPTIMIZER_MAX_PROMPT_LENGTH = 50
 MAX_DRAW_RETRY_COUNT = 3
 DRAW_RETRY_DELAY_SECONDS = 2
 RETRYABLE_DRAW_STATUS_CODES = {502, 524}
+DRAW_PROTOCOL_OPENAI_CHAT = "openai_chat"
+DRAW_PROTOCOL_OPENAI_IMAGES = "openai_images"
+SUPPORTED_DRAW_PROTOCOLS = {
+    DRAW_PROTOCOL_OPENAI_CHAT,
+    DRAW_PROTOCOL_OPENAI_IMAGES,
+}
 
 
 class DrawError(Exception):
@@ -71,6 +77,13 @@ def build_draw_request(
     return {
         "model": model,
         "messages": [{"role": "user", "content": content}],
+    }
+
+
+def build_openai_images_request(model: str, prompt: str) -> dict[str, Any]:
+    return {
+        "model": model,
+        "prompt": prompt,
     }
 
 
@@ -177,6 +190,7 @@ class Image2DrawClient:
         api_url: str,
         api_key: str,
         model: str,
+        draw_protocol: str = DRAW_PROTOCOL_OPENAI_CHAT,
         request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         draw_retry_count: int = 0,
         optimize_prompt: bool = False,
@@ -188,6 +202,9 @@ class Image2DrawClient:
         self.api_url = api_url.strip()
         self.api_key = api_key.strip()
         self.model = model.strip()
+        self.draw_protocol = (
+            draw_protocol.strip().lower() or DRAW_PROTOCOL_OPENAI_CHAT
+        )
         self.request_timeout_seconds = int(request_timeout_seconds)
         self.draw_retry_count = int(draw_retry_count)
         self.optimize_prompt_enabled = optimize_prompt
@@ -201,7 +218,7 @@ class Image2DrawClient:
         prompt: str,
         image_ref: str | None = None,
     ) -> tuple[ImageOutput, str]:
-        self.validate_config(prompt)
+        self.validate_config(prompt, bool(image_ref))
         if aiohttp is None:
             raise DrawError("运行环境缺少 aiohttp，无法调用绘图接口。")
 
@@ -211,11 +228,13 @@ class Image2DrawClient:
             if self._should_optimize_prompt(prompt):
                 final_prompt = await self._optimize_prompt(session, prompt)
 
-            image_data_url = None
-            if image_ref:
-                image_data_url = await self._load_image_data_url(session, image_ref)
-
-            payload = build_draw_request(self.model, final_prompt, image_data_url)
+            if self.draw_protocol == DRAW_PROTOCOL_OPENAI_IMAGES:
+                payload = build_openai_images_request(self.model, final_prompt)
+            else:
+                image_data_url = None
+                if image_ref:
+                    image_data_url = await self._load_image_data_url(session, image_ref)
+                payload = build_draw_request(self.model, final_prompt, image_data_url)
             response = await self._post_json(
                 session,
                 self.api_url,
@@ -236,14 +255,28 @@ class Image2DrawClient:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             return await self._optimize_prompt(session, prompt)
 
-    def validate_config(self, prompt: str | None = None) -> None:
+    def validate_config(
+        self,
+        prompt: str | None = None,
+        has_reference_image: bool = False,
+    ) -> None:
         if not self.api_url:
             raise DrawError("请先在 WebUI 中填写绘图 API 地址。")
-        _validate_chat_api_url(self.api_url, "绘图 API")
+        _validate_api_url(self.api_url, "绘图 API")
         if not self.api_key:
             raise DrawError("请先在 WebUI 中填写绘图 API Key。")
         if not self.model:
             raise DrawError("请先在 WebUI 中填写绘图模型。")
+        if self.draw_protocol not in SUPPORTED_DRAW_PROTOCOLS:
+            raise DrawError("绘图接口协议只支持 openai_chat 或 openai_images。")
+        if (
+            has_reference_image
+            and self.draw_protocol == DRAW_PROTOCOL_OPENAI_IMAGES
+        ):
+            raise DrawError(
+                "当前选择 openai_images（通常为 /v1/images/generations），"
+                "不支持参考图。请移除附图/回复图片，或切换为 openai_chat。"
+            )
         if not 1 <= self.request_timeout_seconds <= 3600:
             raise DrawError("最大等待时间需要在 1 到 3600 秒之间。")
         if not 0 <= self.draw_retry_count <= MAX_DRAW_RETRY_COUNT:
@@ -263,7 +296,7 @@ class Image2DrawClient:
             raise DrawError("最大等待时间需要在 1 到 3600 秒之间。")
         if not self.optimizer_api_url or not self.optimizer_model:
             raise DrawError("请先在 WebUI 中完整填写优化接口地址和模型。")
-        _validate_chat_api_url(self.optimizer_api_url, "优化接口")
+        _validate_api_url(self.optimizer_api_url, "优化接口")
 
     def _should_optimize_prompt(self, prompt: str) -> bool:
         if not self.optimize_prompt_enabled:
@@ -376,7 +409,7 @@ class Image2DrawClient:
         except json.JSONDecodeError as exc:
             if "<html" in text.lower():
                 raise DrawError(
-                    f"{action}地址返回了网页，不是 API；地址应以 /v1/chat/completions 结尾。"
+                    f"{action}地址返回了网页，不是 API；请确认填写的是服务商提供的 API 请求地址。"
                 ) from exc
             raise DrawError(f"{action}接口返回的不是有效 JSON。") from exc
 
@@ -385,14 +418,10 @@ class Image2DrawClient:
         return parsed
 
 
-def _validate_chat_api_url(url: str, label: str) -> None:
+def _validate_api_url(url: str, label: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise DrawError(f"{label}地址格式不正确。")
-    if "//" in parsed.path or not parsed.path.endswith("/v1/chat/completions"):
-        raise DrawError(
-            f"{label}地址应以 /v1/chat/completions 结尾，且域名后不能重复写 /。"
-        )
 
 
 def _find_image_output(value: Any) -> ImageOutput | None:

@@ -3,7 +3,7 @@
 <div align="center">
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)
-![Version](https://img.shields.io/badge/version-v1.0.4-green)
+![Version](https://img.shields.io/badge/version-v1.0.5-green)
 ![Platform](https://img.shields.io/badge/platform-Multi--platform-lightgrey)
 
 Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，也可以附带或回复图片进行参考图修改。
@@ -25,7 +25,7 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 - 支持 `/draw <提示词>` 文字生成图片。
 - 支持同一条消息附图后执行修改。
 - 支持回复一张图片后执行修改。
-- 使用 OpenAI Chat 兼容的多模态请求，绘图模型名可在 WebUI 自定义。
+- 支持 OpenAI Chat 和 OpenAI Images 两种绘图请求协议，绘图模型名可在 WebUI 自定义。
 - 可选调用另一套模型优化文字提示词，不限制模型厂商。
 - 支持图片 URL 和 base64 两种绘图响应。
 - API Key 只从 AstrBot WebUI 配置读取，不内置任何真实密钥。
@@ -77,20 +77,30 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 
 | 配置项 | 必填 | 说明 |
 | --- | --- | --- |
-| `image_api_url` | 是 | OpenAI Chat 兼容完整地址，通常以 `/v1/chat/completions` 结尾；不要只填根地址或重复写 `/` |
+| `image_api_url` | 是 | 按服务商后台显示的入站端点原样填写完整地址，插件不会补全或改写路径 |
+| `image_api_protocol` | 是 | `openai_chat` 使用 Chat 请求体并支持参考图；`openai_images` 使用 Images 请求体，仅支持文字绘图 |
 | `image_api_key` | 是 | 绘图服务 API Key |
 | `image_model` | 是 | 绘图模型名，例如 `gpt-image-2` |
 | `request_timeout_seconds` | 是 | 单次请求最大等待时间，默认 240 秒，可填写 1 到 3600 |
 | `draw_retry_count` | 否 | 绘图接口返回 502 或 524 时的重试次数，默认 0，可填写 0 到 3；可能重复生成或计费 |
 | `optimize_prompt` | 否 | 是否在绘图前优化文字提示词 |
 | `optimizer_max_prompt_length` | 否 | 启用优化时，超过该长度自动跳过优化；默认 50，中文每字计 1，0 表示不限制 |
-| `optimizer_api_url` | 开启 `/draw` 自动优化或使用 `/youhua` 时 | 任意厂商的完整 OpenAI Chat 地址，必须以 `/v1/chat/completions` 结尾 |
+| `optimizer_api_url` | 开启 `/draw` 自动优化或使用 `/youhua` 时 | 任意厂商的完整 OpenAI Chat 端点，插件不会补全或改写路径 |
 | `optimizer_api_key` | 否 | 优化服务需要鉴权时填写，本地服务可以留空 |
 | `optimizer_model` | 开启 `/draw` 自动优化或使用 `/youhua` 时 | 优化接口支持的模型名，不限制厂商 |
 
 提示词优化只处理文字要求，不读取参考图，也不会猜测图片中没有明确说明的内容。
 
-提示词优化的接口地址也必须填写完整路径。以 SiliconFlow 为例，应填写 `https://api.siliconflow.cn/v1/chat/completions`；只填写 `https://api.siliconflow.cn/` 会返回 HTTP `404`。
+提示词优化始终使用 Chat 请求体。请按服务商页面给出的完整 Chat 端点填写，例如 `https://api.siliconflow.cn/v1/chat/completions`；插件不会自行补全或改写路径。
+
+绘图协议按服务商后台的“入站协议”或“端点”选择：
+
+```text
+入站 /v1/chat/completions -> image_api_protocol = openai_chat
+入站 /v1/images/generations -> image_api_protocol = openai_images
+```
+
+`openai_images` 会发送 `model + prompt`，适用于文字生图；它不是图片编辑接口，附图或回复图片时请切换到 `openai_chat`，或使用服务商提供的 `/v1/images/edits` 功能。
 
 绘图服务返回 `502` 表示上游通道暂时不可用，`524` 表示上游处理超时，调大本地等待时间并不能保证解决。可按需要设置 `draw_retry_count`，但 `524` 后上游可能仍在生成，自动重试可能产生重复图片或额外计费。
 
@@ -112,7 +122,7 @@ data/config/astrbot_plugin_image2_draw_config.json
 
 ### 为什么提示“地址返回了网页”？
 
-绘图和优化接口都使用 Chat 协议，地址应以 `/v1/chat/completions` 结尾，域名后不要重复写 `/`。例如 SiliconFlow 应填写 `https://api.siliconflow.cn/v1/chat/completions`；只填根地址或填写 `//v1/chat/completions` 都会在请求前被拦住。
+插件不会猜测或补全端点。请按服务商页面显示的入站端点填写完整地址：`openai_chat` 通常是 `/v1/chat/completions`，`openai_images` 通常是 `/v1/images/generations`。优化接口始终使用 Chat 协议。插件不支持 OpenAI Responses 请求体。
 
 ### 为什么提示“响应中没有找到图片”？
 
@@ -128,6 +138,12 @@ data/config/astrbot_plugin_image2_draw_config.json
 
 ## 更新日志
 
+### v1.0.5
+
+- 新增 `openai_images` 绘图协议，适配 `/v1/images/generations` 的 `model + prompt` 请求体。
+- WebUI 明确提示按服务商页面的入站端点填写，插件不再自动补全或改写地址。
+- `openai_images` 在附图时会在开始绘画前提示切换协议，避免发送错误请求。
+
 ### v1.0.4
 
 - `/youhua` 在优化服务配置校验通过后，会先回复“开始优化喵”。
@@ -136,7 +152,7 @@ data/config/astrbot_plugin_image2_draw_config.json
 
 - 新增 `/youhua <提示词>`，显式调用优化模型并输出优化后的提示词。
 - `/youhua` 仅依赖优化接口配置，不受 `/draw` 自动优化开关和 50 字跳过阈值影响。
-- 绘图和优化接口会在请求前校验完整 Chat 地址，避免根地址或重复斜杠导致上游 `404`。
+- 绘图和优化接口会在请求前校验地址格式。
 
 ### v1.0.2
 

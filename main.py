@@ -43,7 +43,7 @@ class Image2DrawPlugin(Star):
 
         try:
             image_ref = await _find_reference_image(event)
-            client.validate_config(prompt)
+            client.validate_config(prompt, bool(image_ref))
             yield event.plain_result("开始绘画喵")
             output, _ = await client.draw(prompt, image_ref)
         except DrawError as exc:
@@ -136,6 +136,7 @@ def _create_client(config: AstrBotConfig) -> Image2DrawClient:
         api_url=_config_text(config, "image_api_url"),
         api_key=_config_text(config, "image_api_key"),
         model=_config_text(config, "image_model"),
+        draw_protocol=_config_text(config, "image_api_protocol"),
         request_timeout_seconds=_config_int(config, "request_timeout_seconds", 240),
         draw_retry_count=_config_int(config, "draw_retry_count", 0),
         optimize_prompt=_config_bool(config, "optimize_prompt"),

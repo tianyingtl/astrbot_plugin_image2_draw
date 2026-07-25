@@ -3,7 +3,17 @@
     "description": "绘图 API 地址",
     "type": "string",
     "default": "",
-    "hint": "填写完整 Chat 地址并以 /v1/chat/completions 结尾；不要只填根地址，也不要在域名后重复写 /。"
+    "hint": "按服务商后台显示的入站端点原样填写完整地址，插件不会补全或改写路径。openai_chat 常见为 /v1/chat/completions；openai_images 常见为 /v1/images/generations。"
+  },
+  "image_api_protocol": {
+    "description": "绘图接口协议",
+    "type": "string",
+    "default": "openai_chat",
+    "options": [
+      "openai_chat",
+      "openai_images"
+    ],
+    "hint": "按服务商页面的入站协议选择。openai_chat 使用 Chat 请求体并支持参考图；openai_images 使用 /v1/images/generations 的 model + prompt 请求体，只支持文字绘图。"
   },
   "image_api_key": {
     "description": "绘图 API Key",
@@ -46,7 +56,7 @@
     "description": "优化模型 API 地址",
     "type": "string",
     "default": "",
-    "hint": "供 /draw 自动优化和 /youhua 使用。填写完整 Chat 地址并以 /v1/chat/completions 结尾；例如 SiliconFlow： https://api.siliconflow.cn/v1/chat/completions。只填根地址会返回 404。"
+    "hint": "供 /draw 自动优化和 /youhua 使用。优化接口始终发送 Chat 请求体，请按服务商页面显示的完整 Chat 端点原样填写；插件不会补全或改写路径。"
   },
   "optimizer_api_key": {
     "description": "优化模型 API Key（可选）",
