@@ -40,6 +40,24 @@
     "default": 0,
     "hint": "仅在绘图接口返回 502 或 524 时重试，可填写 0 到 3；重试可能重复生成或计费。"
   },
+  "whitelist_groups": {
+    "description": "可使用绘图的 QQ 群",
+    "type": "list",
+    "default": [],
+    "hint": "每项填写一个 QQ 群号。留空表示所有群都能使用 /draw；只限制群聊，不限制私聊，也不限制 /youhua。"
+  },
+  "daily_draw_limit": {
+    "description": "每人每日绘图次数",
+    "type": "int",
+    "default": 1,
+    "hint": "每个用户每天可调用 /draw 的次数，默认 1 次；小于 1 时按 1 次处理。绘图失败会退回次数。"
+  },
+  "unlimited_users": {
+    "description": "无限绘图次数 QQ 白名单",
+    "type": "list",
+    "default": [],
+    "hint": "每项填写一个 QQ 号。名单内用户不受每日绘图次数限制，但在群聊中仍需该群位于群白名单；不影响 /youhua。"
+  },
   "optimize_prompt": {
     "description": "启用提示词优化",
     "type": "bool",

@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
 
@@ -82,15 +84,27 @@ def _install_astrbot_stubs():
 
 _install_astrbot_stubs()
 import main  # noqa: E402
-from image2_draw import ImageOutput  # noqa: E402
+from image2_draw import DrawError, ImageOutput  # noqa: E402
 
 
 class _Event:
-    def __init__(self, message_str, messages=None):
+    def __init__(self, message_str, messages=None, *, sender_id="10001", group_id=""):
         self.message_str = message_str
         self.messages = messages or []
         self.stopped = False
-        self.message_obj = types.SimpleNamespace(message_id="draw-123")
+        self.sender_id = sender_id
+        self.group_id = group_id
+        self.message_obj = types.SimpleNamespace(
+            message_id="draw-123",
+            group_id=group_id,
+            sender=types.SimpleNamespace(user_id=sender_id),
+        )
+
+    def get_sender_id(self):
+        return self.sender_id
+
+    def get_group_id(self):
+        return self.group_id
 
     def get_messages(self):
         return self.messages
@@ -125,9 +139,23 @@ class _SuccessfulClient:
         return "优化后的提示词"
 
 
+class _FailingClient(_SuccessfulClient):
+    async def draw(self, _prompt, _image_ref):
+        raise DrawError("上游失败")
+
+
+async def _collect(generator):
+    return [result async for result in generator]
+
+
 class HandlerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        self.temporary_dir = TemporaryDirectory()
+        self.addCleanup(self.temporary_dir.cleanup)
         self.plugin = main.Image2DrawPlugin(_Context(), {})
+        self.plugin.usage_store = main.DailyUsageStore(
+            Path(self.temporary_dir.name) / "daily_usage.json"
+        )
 
     async def test_usage_result_is_yielded_before_event_stops(self):
         event = _Event("draw")
@@ -142,7 +170,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(event.stopped)
 
     async def test_image_result_is_yielded_before_event_stops(self):
-        event = _Event("draw 画一只猫")
+        event = _Event("draw 画一只猫", group_id="99999")
         with patch.object(main, "Image2DrawClient", _SuccessfulClient):
             generator = self.plugin.draw(event)
             started = await anext(generator)
@@ -175,6 +203,92 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(StopAsyncIteration):
             await anext(generator)
         self.assertTrue(event.stopped)
+
+    async def test_group_whitelist_blocks_draw(self):
+        plugin = main.Image2DrawPlugin(
+            _Context(),
+            {"whitelist_groups": ["12345"]},
+        )
+        results = await _collect(
+            plugin.draw(_Event("draw 画一只猫", group_id="99999"))
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("本群未加入", results[0].value)
+        self.assertNotEqual(results[0].value, "开始绘画喵")
+
+    async def test_daily_limit_defaults_to_one_and_survives_reload(self):
+        with TemporaryDirectory() as temporary_dir:
+            usage_path = Path(temporary_dir) / "daily_usage.json"
+            first_plugin = main.Image2DrawPlugin(_Context(), {})
+            first_plugin.usage_store = main.DailyUsageStore(usage_path)
+            with patch.object(main, "Image2DrawClient", _SuccessfulClient):
+                first_results = await _collect(
+                    first_plugin.draw(_Event("draw 第一次", sender_id="20001"))
+                )
+
+            second_plugin = main.Image2DrawPlugin(_Context(), {})
+            second_plugin.usage_store = main.DailyUsageStore(usage_path)
+            with patch.object(main, "Image2DrawClient", _SuccessfulClient):
+                second_results = await _collect(
+                    second_plugin.draw(_Event("draw 第二次", sender_id="20001"))
+                )
+
+        self.assertEqual(first_results[0].value, "开始绘画喵")
+        self.assertEqual(len(second_results), 1)
+        self.assertIn("次数已用完（1/1）", second_results[0].value)
+
+    async def test_unlimited_user_bypasses_daily_limit(self):
+        with TemporaryDirectory() as temporary_dir:
+            plugin = main.Image2DrawPlugin(
+                _Context(),
+                {
+                    "daily_draw_limit": 1,
+                    "unlimited_users": ["30001"],
+                },
+            )
+            plugin.usage_store = main.DailyUsageStore(
+                Path(temporary_dir) / "daily_usage.json"
+            )
+            with patch.object(main, "Image2DrawClient", _SuccessfulClient):
+                first_results = await _collect(
+                    plugin.draw(_Event("draw 第一次", sender_id="30001"))
+                )
+                second_results = await _collect(
+                    plugin.draw(_Event("draw 第二次", sender_id="30001"))
+                )
+
+        self.assertEqual(first_results[0].value, "开始绘画喵")
+        self.assertEqual(second_results[0].value, "开始绘画喵")
+
+    async def test_failed_draw_refunds_daily_usage(self):
+        with TemporaryDirectory() as temporary_dir:
+            plugin = main.Image2DrawPlugin(_Context(), {"daily_draw_limit": 1})
+            plugin.usage_store = main.DailyUsageStore(
+                Path(temporary_dir) / "daily_usage.json"
+            )
+            with patch.object(main, "Image2DrawClient", _FailingClient):
+                failed_results = await _collect(
+                    plugin.draw(_Event("draw 失败", sender_id="40001"))
+                )
+            with patch.object(main, "Image2DrawClient", _SuccessfulClient):
+                retry_results = await _collect(
+                    plugin.draw(_Event("draw 重试", sender_id="40001"))
+                )
+
+        self.assertIn("绘图失败", failed_results[-1].value)
+        self.assertEqual(retry_results[0].value, "开始绘画喵")
+
+    async def test_youhua_is_not_restricted_by_group_whitelist(self):
+        plugin = main.Image2DrawPlugin(
+            _Context(),
+            {"whitelist_groups": ["12345"]},
+        )
+        with patch.object(main, "Image2DrawClient", _SuccessfulClient):
+            results = await _collect(
+                plugin.youhua(_Event("youhua 优化它", group_id="99999"))
+            )
+        self.assertEqual(results[0].value, "开始优化喵")
+        self.assertIn("优化后的提示词", results[1].value)
 
     async def test_openai_images_reference_does_not_send_started_message(self):
         plugin = main.Image2DrawPlugin(

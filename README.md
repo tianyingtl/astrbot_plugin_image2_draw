@@ -3,7 +3,7 @@
 <div align="center">
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)
-![Version](https://img.shields.io/badge/version-v1.0.5-green)
+![Version](https://img.shields.io/badge/version-v1.0.6-green)
 ![Platform](https://img.shields.io/badge/platform-Multi--platform-lightgrey)
 
 Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，也可以附带或回复图片进行参考图修改。
@@ -71,6 +71,8 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 
 机器人会先回复“开始优化喵”，再输出优化后的提示词。这个命令只需要配置优化接口和优化模型，不需要配置绘图接口；即使提示词超过 50 字，也会按你的要求尝试优化。
 
+`/youhua` 不受绘图群白名单和每日绘图次数限制。
+
 ## WebUI 配置
 
 插件提供 `_conf_schema.json`，可在 AstrBot 插件设置页配置：
@@ -83,6 +85,9 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 | `image_model` | 是 | 绘图模型名，例如 `gpt-image-2` |
 | `request_timeout_seconds` | 是 | 单次请求最大等待时间，默认 240 秒，可填写 1 到 3600 |
 | `draw_retry_count` | 否 | 绘图接口返回 502 或 524 时的重试次数，默认 0，可填写 0 到 3；可能重复生成或计费 |
+| `whitelist_groups` | 否 | 可使用 `/draw` 的 QQ 群号；留空允许所有群，私聊不受限制 |
+| `daily_draw_limit` | 是 | 每人每天可成功使用 `/draw` 的次数，默认 1；绘图失败会退回次数 |
+| `unlimited_users` | 否 | 不受每日次数限制的 QQ 号；仍需遵守群白名单 |
 | `optimize_prompt` | 否 | 是否在绘图前优化文字提示词 |
 | `optimizer_max_prompt_length` | 否 | 启用优化时，超过该长度自动跳过优化；默认 50，中文每字计 1，0 表示不限制 |
 | `optimizer_api_url` | 开启 `/draw` 自动优化或使用 `/youhua` 时 | 任意厂商的完整 OpenAI Chat 端点，插件不会补全或改写路径 |
@@ -101,6 +106,10 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 ```
 
 `openai_images` 会发送 `model + prompt`，适用于文字生图；它不是图片编辑接口，附图或回复图片时请切换到 `openai_chat`，或使用服务商提供的 `/v1/images/edits` 功能。
+
+群白名单只限制 `/draw`：不填写 `whitelist_groups` 时所有群都能绘图；填写后只有名单内的群能绘图，私聊始终可用。每日次数按用户 QQ 号统计，跨群与私聊共用，服务器日期变化后自动重置。`unlimited_users` 中的用户不受次数限制，但不能绕过群白名单。
+
+绘图次数保存在用户目录的 `.astrbot_plugin_image2_draw/daily_usage.json`，插件重载或更新不会清空。只有成功生成图片才占用次数；接口报错会退回本次预留。
 
 绘图服务返回 `502` 表示上游通道暂时不可用，`524` 表示上游处理超时，调大本地等待时间并不能保证解决。可按需要设置 `draw_retry_count`，但 `524` 后上游可能仍在生成，自动重试可能产生重复图片或额外计费。
 
@@ -137,6 +146,13 @@ data/config/astrbot_plugin_image2_draw_config.json
 图片模型通常比文本模型耗时更长。插件单次请求超时为 240 秒。
 
 ## 更新日志
+
+### v1.0.6
+
+- 新增 `/draw` QQ 群白名单，留空时允许所有群，私聊不受限制。
+- 新增每人每日绘图次数，默认 1 次；失败会退回次数，个人白名单用户无限次。
+- `/youhua` 不受群白名单和每日次数限制。
+- 每日次数持久保存，插件重载或更新后仍然有效。
 
 ### v1.0.5
 

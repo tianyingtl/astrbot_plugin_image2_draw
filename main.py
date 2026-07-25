@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import json
+from datetime import date
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
@@ -24,13 +27,83 @@ except ImportError:
     )
 
 
+class DailyUsageStore:
+    def __init__(self, path: Path):
+        self.path = path
+        self._lock = asyncio.Lock()
+
+    async def reserve(self, user_id: str, limit: int) -> tuple[bool, int]:
+        async with self._lock:
+            data = self._load_today()
+            users = data["users"]
+            used = self._count(users.get(user_id, 0))
+            if used >= limit:
+                return False, used
+            users[user_id] = used + 1
+            self._save(data)
+            return True, used + 1
+
+    async def refund(self, user_id: str) -> None:
+        async with self._lock:
+            data = self._load_today()
+            users = data["users"]
+            used = self._count(users.get(user_id, 0))
+            if used <= 0:
+                return
+            if used == 1:
+                users.pop(user_id, None)
+            else:
+                users[user_id] = used - 1
+            self._save(data)
+
+    def _load_today(self) -> dict:
+        today = date.today().isoformat()
+        try:
+            with self.path.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+        except (OSError, json.JSONDecodeError):
+            data = {}
+
+        if not isinstance(data, dict) or data.get("date") != today:
+            return {"date": today, "users": {}}
+        users = data.get("users")
+        if not isinstance(users, dict):
+            users = {}
+        return {"date": today, "users": users}
+
+    def _save(self, data: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self.path.with_name(f"{self.path.name}.tmp")
+        with temporary_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+        temporary_path.replace(self.path)
+
+    @staticmethod
+    def _count(value) -> int:
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+
+
 class Image2DrawPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        self.usage_store = DailyUsageStore(
+            Path.home() / ".astrbot_plugin_image2_draw" / "daily_usage.json"
+        )
 
     @filter.command("draw")
     async def draw(self, event: AstrMessageEvent):
+        if not self._draw_group_allowed(event):
+            yield _reply_to_command_message(
+                event,
+                event.plain_result("本群未加入 Image2 绘图插件白名单。"),
+            )
+            event.stop_event()
+            return
+
         prompt = extract_draw_prompt(getattr(event, "message_str", ""))
         if not prompt:
             yield event.plain_result(
@@ -41,18 +114,46 @@ class Image2DrawPlugin(Star):
 
         client = _create_client(self.config)
 
+        reserved_sender_id = ""
         try:
             image_ref = await _find_reference_image(event)
             client.validate_config(prompt, bool(image_ref))
+
+            sender_id = _get_sender_id(event)
+            unlimited_users = _normalize_id_list(
+                self.config.get("unlimited_users", [])
+            )
+            if sender_id not in unlimited_users:
+                if not sender_id:
+                    raise DrawError("无法识别当前用户，不能检查每日绘图次数。")
+                daily_limit = max(
+                    1, _config_int(self.config, "daily_draw_limit", 1)
+                )
+                allowed, used = await self.usage_store.reserve(sender_id, daily_limit)
+                if not allowed:
+                    yield _reply_to_command_message(
+                        event,
+                        event.plain_result(
+                            f"你今天的绘图次数已用完（{used}/{daily_limit}）。"
+                        ),
+                    )
+                    event.stop_event()
+                    return
+                reserved_sender_id = sender_id
+
             yield event.plain_result("开始绘画喵")
             output, _ = await client.draw(prompt, image_ref)
         except DrawError as exc:
+            if reserved_sender_id:
+                await self.usage_store.refund(reserved_sender_id)
             yield _reply_to_command_message(
                 event, event.plain_result(f"绘图失败：{exc}")
             )
             event.stop_event()
             return
         except Exception:
+            if reserved_sender_id:
+                await self.usage_store.refund(reserved_sender_id)
             logger.exception("Image2 绘图插件处理请求失败")
             yield _reply_to_command_message(
                 event,
@@ -104,6 +205,13 @@ class Image2DrawPlugin(Star):
             event, event.plain_result(f"优化后的提示词：\n{optimized_prompt}")
         )
         event.stop_event()
+
+    def _draw_group_allowed(self, event: AstrMessageEvent) -> bool:
+        group_id = _get_group_id(event)
+        if not group_id:
+            return True
+        whitelist = _normalize_id_list(self.config.get("whitelist_groups", []))
+        return not whitelist or group_id in whitelist
 
 
 async def _find_reference_image(event: AstrMessageEvent) -> str | None:
@@ -165,3 +273,44 @@ def _config_int(config: AstrBotConfig, key: str, default: int) -> int:
         return int(config.get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+def _get_sender_id(event: AstrMessageEvent) -> str:
+    getter = getattr(event, "get_sender_id", None)
+    if callable(getter):
+        sender_id = getter()
+        if sender_id:
+            return str(sender_id)
+
+    message_obj = getattr(event, "message_obj", None)
+    sender = getattr(message_obj, "sender", None)
+    for attr in ("user_id", "sender_id", "id"):
+        value = getattr(sender, attr, None)
+        if value:
+            return str(value)
+    return ""
+
+
+def _get_group_id(event: AstrMessageEvent) -> str:
+    getter = getattr(event, "get_group_id", None)
+    if callable(getter):
+        group_id = getter()
+        if group_id:
+            return str(group_id)
+
+    message_obj = getattr(event, "message_obj", None)
+    group_id = getattr(message_obj, "group_id", "")
+    return str(group_id) if group_id else ""
+
+
+def _normalize_id_list(value) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        text = value
+        for separator in (",", "，", ";", "；"):
+            text = text.replace(separator, " ")
+        items = text.split()
+    else:
+        items = value
+    return {str(item).strip() for item in items if str(item).strip()}
