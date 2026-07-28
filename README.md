@@ -3,7 +3,7 @@
 <div align="center">
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)
-![Version](https://img.shields.io/badge/version-v1.0.6-green)
+![Version](https://img.shields.io/badge/version-v1.0.7-green)
 ![Platform](https://img.shields.io/badge/platform-Multi--platform-lightgrey)
 
 Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，也可以附带或回复图片进行参考图修改。
@@ -46,6 +46,8 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 ```text
 /draw 一座建在云海上的未来城市，清晨，电影感光线
 ```
+
+群聊中可以直接发送 `/draw`，不需要 @机器人。
 
 ### 修改同一条消息中的图片
 
@@ -146,6 +148,10 @@ data/config/astrbot_plugin_image2_draw_config.json
 图片模型通常比文本模型耗时更长。插件单次请求超时为 240 秒。
 
 ## 更新日志
+
+### v1.0.7
+
+- 群聊中的 `/draw` 和 `/youhua` 不再要求 @机器人即可识别。
 
 ### v1.0.6
 

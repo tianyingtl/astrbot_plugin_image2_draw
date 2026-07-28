@@ -14,8 +14,14 @@ class _Logger:
 
 
 class _Filter:
+    EventMessageType = types.SimpleNamespace(ALL="ALL")
+
     @staticmethod
     def command(_name):
+        return lambda function: function
+
+    @staticmethod
+    def event_message_type(_event_type):
         return lambda function: function
 
 
@@ -168,6 +174,33 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(StopAsyncIteration):
             await anext(generator)
         self.assertTrue(event.stopped)
+
+    async def test_bare_draw_event_routes_without_mention(self):
+        event = _Event("/draw 画一只猫", group_id="99999")
+        with patch.object(main, "Image2DrawClient", _SuccessfulClient):
+            results = await _collect(self.plugin.on_message(event))
+
+        self.assertEqual(results[0].value, "开始绘画喵")
+        self.assertEqual(results[1].kind, "url")
+        self.assertTrue(event.stopped)
+
+    async def test_bare_youhua_event_routes_without_mention(self):
+        event = _Event("/youhua 优化它", group_id="99999")
+        with patch.object(main, "Image2DrawClient", _SuccessfulClient):
+            results = await _collect(self.plugin.on_message(event))
+
+        self.assertEqual(results[0].value, "开始优化喵")
+        self.assertIn("优化后的提示词", results[1].value)
+        self.assertTrue(event.stopped)
+
+    def test_mentioned_command_is_still_recognized(self):
+        self.assertEqual(main._parse_image_command("@Image2 /draw 画一只猫"), "draw")
+
+    async def test_unrelated_message_is_ignored(self):
+        event = _Event("今天试一下 /draw")
+        results = await _collect(self.plugin.on_message(event))
+        self.assertEqual(results, [])
+        self.assertFalse(event.stopped)
 
     async def test_image_result_is_yielded_before_event_stops(self):
         event = _Event("draw 画一只猫", group_id="99999")

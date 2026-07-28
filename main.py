@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import date
 from pathlib import Path
 
@@ -94,7 +95,16 @@ class Image2DrawPlugin(Star):
             Path.home() / ".astrbot_plugin_image2_draw" / "daily_usage.json"
         )
 
-    @filter.command("draw")
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_message(self, event: AstrMessageEvent):
+        command = _parse_image_command(getattr(event, "message_str", ""))
+        if command == "draw":
+            async for result in self.draw(event):
+                yield result
+        elif command == "youhua":
+            async for result in self.youhua(event):
+                yield result
+
     async def draw(self, event: AstrMessageEvent):
         if not self._draw_group_allowed(event):
             yield _reply_to_command_message(
@@ -171,7 +181,6 @@ class Image2DrawPlugin(Star):
         yield _reply_to_command_message(event, result)
         event.stop_event()
 
-    @filter.command("youhua")
     async def youhua(self, event: AstrMessageEvent):
         prompt = extract_youhua_prompt(getattr(event, "message_str", ""))
         if not prompt:
@@ -314,3 +323,10 @@ def _normalize_id_list(value) -> set[str]:
     else:
         items = value
     return {str(item).strip() for item in items if str(item).strip()}
+
+
+def _parse_image_command(message: str) -> str | None:
+    text = (message or "").strip()
+    text = re.sub(r"^(?:\[CQ:at,[^\]]+\]|@\S+)\s*", "", text)
+    match = re.match(r"^[／/](draw|youhua)(?:\s|$)", text, re.IGNORECASE)
+    return match.group(1).lower() if match else None
