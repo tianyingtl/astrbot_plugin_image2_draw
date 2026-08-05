@@ -3,7 +3,7 @@
 <div align="center">
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)
-![Version](https://img.shields.io/badge/version-v1.0.7-green)
+![Version](https://img.shields.io/badge/version-v1.0.8-green)
 ![Platform](https://img.shields.io/badge/platform-Multi--platform-lightgrey)
 
 Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，也可以附带或回复图片进行参考图修改。
@@ -25,7 +25,8 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 - 支持 `/draw <提示词>` 文字生成图片。
 - 支持同一条消息附图后执行修改。
 - 支持回复一张图片后执行修改。
-- 支持 OpenAI Chat 和 OpenAI Images 两种绘图请求协议，绘图模型名可在 WebUI 自定义。
+- 支持 OpenAI Chat 和 OpenAI Images 两种绘图请求协议；Images 协议可分别配置生成和编辑端点。
+- OpenAI Images 清晰度可选 `1K`、`2K`、`4K`，默认 `4K`。
 - 可选调用另一套模型优化文字提示词，不限制模型厂商。
 - 支持图片 URL 和 base64 两种绘图响应。
 - API Key 只从 AstrBot WebUI 配置读取，不内置任何真实密钥。
@@ -81,10 +82,12 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 
 | 配置项 | 必填 | 说明 |
 | --- | --- | --- |
-| `image_api_url` | 是 | 按服务商后台显示的入站端点原样填写完整地址，插件不会补全或改写路径 |
-| `image_api_protocol` | 是 | `openai_chat` 使用 Chat 请求体并支持参考图；`openai_images` 使用 Images 请求体，仅支持文字绘图 |
+| `image_api_url` | 是 | Chat 完整端点，或 Images 的完整 `/v1/images/generations` 端点 |
+| `image_edit_api_url` | 使用 Images 参考图编辑时 | Images 的完整 `/v1/images/edits` 端点；只做文字生图可留空 |
+| `image_api_protocol` | 是 | `openai_chat` 使用 Chat 请求体；`openai_images` 自动按是否附图选择生成或编辑端点 |
 | `image_api_key` | 是 | 绘图服务 API Key |
 | `image_model` | 是 | 绘图模型名，例如 `gpt-image-2` |
+| `image_resolution` | 是 | Images 生成和编辑使用的清晰度，默认 `4K`，可选 `1K`、`2K`、`4K` |
 | `request_timeout_seconds` | 是 | 单次请求最大等待时间，默认 240 秒，可填写 1 到 3600 |
 | `draw_retry_count` | 否 | 绘图接口返回 502 或 524 时的重试次数，默认 0，可填写 0 到 3；可能重复生成或计费 |
 | `whitelist_groups` | 否 | 可使用 `/draw` 的 QQ 群号；留空允许所有群，私聊不受限制 |
@@ -107,7 +110,16 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 入站 /v1/images/generations -> image_api_protocol = openai_images
 ```
 
-`openai_images` 会发送 `model + prompt`，适用于文字生图；它不是图片编辑接口，附图或回复图片时请切换到 `openai_chat`，或使用服务商提供的 `/v1/images/edits` 功能。
+如果服务商同时提供截图中的两个 Images 端点，请这样填写：
+
+```text
+image_api_protocol = openai_images
+image_api_url = https://服务商地址/v1/images/generations
+image_edit_api_url = https://服务商地址/v1/images/edits
+image_resolution = 4K
+```
+
+无附图时插件调用 `generations`；同消息附图或回复图片时调用 `edits`。编辑请求使用 OpenAI Images 标准 multipart 表单。清晰度会作为 `size` 发送，所选模型和服务商需要支持对应值。
 
 群白名单只限制 `/draw`：不填写 `whitelist_groups` 时所有群都能绘图；填写后只有名单内的群能绘图，私聊始终可用。每日次数按用户 QQ 号统计，跨群与私聊共用，服务器日期变化后自动重置。`unlimited_users` 中的用户不受次数限制，但不能绕过群白名单。
 
@@ -116,6 +128,8 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 绘图服务返回 `502` 表示上游通道暂时不可用，`524` 表示上游处理超时，调大本地等待时间并不能保证解决。可按需要设置 `draw_retry_count`，但 `524` 后上游可能仍在生成，自动重试可能产生重复图片或额外计费。
 
 绘图完成或失败时，机器人会引用回复原来的 `/draw` 消息；`/youhua` 的结果和错误也会引用回复原命令。“开始绘画喵”不会引用回复。
+
+插件会要求 Images 接口优先返回 `b64_json`。如果上游仍返回远程图片 URL，插件会在绘图请求结束前下载并校验图片，再交给 AstrBot 发送，避免适配器下载预签名地址超时。
 
 ## 数据与安全
 
@@ -139,6 +153,10 @@ data/config/astrbot_plugin_image2_draw_config.json
 
 检查模型是否确实支持绘图，并确认上游返回了图片 URL、data URL 或 base64 图片数据。
 
+### 为什么生成成功却没有发出图片？
+
+旧版本会把上游返回的远程 URL 直接交给 AstrBot。服务器访问 S3 等图片存储超时时，日志会停在 `Prepare to send`，随后出现 `download_image_by_url` 的 `TimeoutError`。`v1.0.8` 起会优先请求 `b64_json`，并在必要时由插件先下载图片再发送。
+
 ### 优化提示词只能用 OpenAI 模型吗？
 
 不是。模型厂商和模型名不受限制，但填写的接口需要兼容 OpenAI Chat JSON。
@@ -148,6 +166,12 @@ data/config/astrbot_plugin_image2_draw_config.json
 图片模型通常比文本模型耗时更长。插件单次请求超时为 240 秒。
 
 ## 更新日志
+
+### v1.0.8
+
+- `openai_images` 支持分别配置 `/v1/images/generations` 和 `/v1/images/edits`，自动区分文字生图与参考图编辑。
+- 新增图片清晰度设置，支持 `1K`、`2K`、`4K`，默认 `4K`。
+- Images 请求优先返回 `b64_json`；远程 URL 会先下载并校验，再以 base64 交给 AstrBot 发送。
 
 ### v1.0.7
 

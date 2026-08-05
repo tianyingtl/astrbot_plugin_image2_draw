@@ -251,9 +251,11 @@ def _reply_to_command_message(event: AstrMessageEvent, result):
 def _create_client(config: AstrBotConfig) -> Image2DrawClient:
     return Image2DrawClient(
         api_url=_config_text(config, "image_api_url"),
+        edit_api_url=_config_text(config, "image_edit_api_url"),
         api_key=_config_text(config, "image_api_key"),
         model=_config_text(config, "image_model"),
         draw_protocol=_config_text(config, "image_api_protocol"),
+        image_resolution=_config_text(config, "image_resolution"),
         request_timeout_seconds=_config_int(config, "request_timeout_seconds", 240),
         draw_retry_count=_config_int(config, "draw_retry_count", 0),
         optimize_prompt=_config_bool(config, "optimize_prompt"),

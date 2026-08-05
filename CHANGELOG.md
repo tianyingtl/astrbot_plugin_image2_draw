@@ -1,5 +1,11 @@
 # 更新日志
 
+## v1.0.8
+
+- `openai_images` 支持分别配置 `/v1/images/generations` 和 `/v1/images/edits`，自动区分文字生图与参考图编辑。
+- 新增图片清晰度设置，支持 `1K`、`2K`、`4K`，默认 `4K`。
+- Images 请求优先返回 `b64_json`；远程 URL 会先下载并校验，再以 base64 交给 AstrBot 发送。
+
 ## v1.0.7
 
 - 群聊中的 `/draw` 和 `/youhua` 不再要求 @机器人即可识别。

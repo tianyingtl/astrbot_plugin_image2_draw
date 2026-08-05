@@ -8,7 +8,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
@@ -30,6 +30,7 @@ SUPPORTED_DRAW_PROTOCOLS = {
     DRAW_PROTOCOL_OPENAI_CHAT,
     DRAW_PROTOCOL_OPENAI_IMAGES,
 }
+SUPPORTED_IMAGE_RESOLUTIONS = {"1K", "2K", "4K"}
 
 
 class DrawError(Exception):
@@ -80,10 +81,16 @@ def build_draw_request(
     }
 
 
-def build_openai_images_request(model: str, prompt: str) -> dict[str, Any]:
+def build_openai_images_request(
+    model: str,
+    prompt: str,
+    image_resolution: str,
+) -> dict[str, Any]:
     return {
         "model": model,
         "prompt": prompt,
+        "size": image_resolution,
+        "response_format": "b64_json",
     }
 
 
@@ -188,9 +195,11 @@ class Image2DrawClient:
         self,
         *,
         api_url: str,
+        edit_api_url: str = "",
         api_key: str,
         model: str,
         draw_protocol: str = DRAW_PROTOCOL_OPENAI_CHAT,
+        image_resolution: str = "4K",
         request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         draw_retry_count: int = 0,
         optimize_prompt: bool = False,
@@ -200,11 +209,13 @@ class Image2DrawClient:
         optimizer_model: str = "",
     ) -> None:
         self.api_url = api_url.strip()
+        self.edit_api_url = edit_api_url.strip()
         self.api_key = api_key.strip()
         self.model = model.strip()
         self.draw_protocol = (
             draw_protocol.strip().lower() or DRAW_PROTOCOL_OPENAI_CHAT
         )
+        self.image_resolution = image_resolution.strip().upper() or "4K"
         self.request_timeout_seconds = int(request_timeout_seconds)
         self.draw_retry_count = int(draw_retry_count)
         self.optimize_prompt_enabled = optimize_prompt
@@ -229,22 +240,49 @@ class Image2DrawClient:
                 final_prompt = await self._optimize_prompt(session, prompt)
 
             if self.draw_protocol == DRAW_PROTOCOL_OPENAI_IMAGES:
-                payload = build_openai_images_request(self.model, final_prompt)
+                if image_ref:
+                    image_data_url = await self._load_image_data_url(
+                        session, image_ref
+                    )
+                    response = await self._post_image_edit(
+                        session,
+                        self.edit_api_url,
+                        image_data_url,
+                        final_prompt,
+                    )
+                else:
+                    payload = build_openai_images_request(
+                        self.model,
+                        final_prompt,
+                        self.image_resolution,
+                    )
+                    response = await self._post_json(
+                        session,
+                        self.api_url,
+                        self.api_key,
+                        payload,
+                        "绘图",
+                        retry_count=self.draw_retry_count,
+                    )
             else:
                 image_data_url = None
                 if image_ref:
                     image_data_url = await self._load_image_data_url(session, image_ref)
                 payload = build_draw_request(self.model, final_prompt, image_data_url)
-            response = await self._post_json(
+                response = await self._post_json(
+                    session,
+                    self.api_url,
+                    self.api_key,
+                    payload,
+                    "绘图",
+                    retry_count=self.draw_retry_count,
+                )
+            output = await self._materialize_output(
                 session,
-                self.api_url,
-                self.api_key,
-                payload,
-                "绘图",
-                retry_count=self.draw_retry_count,
+                extract_image_output(response),
             )
 
-        return extract_image_output(response), final_prompt
+        return output, final_prompt
 
     async def optimize(self, prompt: str) -> str:
         self.validate_optimizer_config()
@@ -269,14 +307,15 @@ class Image2DrawClient:
             raise DrawError("请先在 WebUI 中填写绘图模型。")
         if self.draw_protocol not in SUPPORTED_DRAW_PROTOCOLS:
             raise DrawError("绘图接口协议只支持 openai_chat 或 openai_images。")
-        if (
-            has_reference_image
-            and self.draw_protocol == DRAW_PROTOCOL_OPENAI_IMAGES
-        ):
-            raise DrawError(
-                "当前选择 openai_images（通常为 /v1/images/generations），"
-                "不支持参考图。请移除附图/回复图片，或切换为 openai_chat。"
-            )
+        if self.draw_protocol == DRAW_PROTOCOL_OPENAI_IMAGES:
+            if self.image_resolution not in SUPPORTED_IMAGE_RESOLUTIONS:
+                raise DrawError("图片清晰度只支持 1K、2K 或 4K。")
+            if has_reference_image:
+                if not self.edit_api_url:
+                    raise DrawError(
+                        "参考图编辑需要先在 WebUI 中填写图片编辑 API 地址。"
+                    )
+                _validate_api_url(self.edit_api_url, "图片编辑 API")
         if not 1 <= self.request_timeout_seconds <= 3600:
             raise DrawError("最大等待时间需要在 1 到 3600 秒之间。")
         if not 0 <= self.draw_retry_count <= MAX_DRAW_RETRY_COUNT:
@@ -368,10 +407,70 @@ class Image2DrawClient:
         action: str,
         retry_count: int = 0,
     ) -> dict[str, Any]:
+        return await self._post_request(
+            session,
+            url,
+            api_key,
+            action,
+            retry_count,
+            lambda: {"json": payload},
+        )
+
+    async def _post_image_edit(
+        self,
+        session: Any,
+        url: str,
+        image_data_url: str,
+        prompt: str,
+    ) -> dict[str, Any]:
+        mime, data = _decode_image_data_url(image_data_url)
+        suffix = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+        }[mime]
+
+        def build_form() -> dict[str, Any]:
+            form = aiohttp.FormData()
+            form.add_field("model", self.model)
+            form.add_field("prompt", prompt)
+            form.add_field("size", self.image_resolution)
+            form.add_field("response_format", "b64_json")
+            form.add_field(
+                "image",
+                data,
+                filename=f"reference{suffix}",
+                content_type=mime,
+            )
+            return {"data": form}
+
+        return await self._post_request(
+            session,
+            url,
+            self.api_key,
+            "绘图",
+            self.draw_retry_count,
+            build_form,
+        )
+
+    async def _post_request(
+        self,
+        session: Any,
+        url: str,
+        api_key: str,
+        action: str,
+        retry_count: int,
+        request_kwargs: Callable[[], dict[str, Any]],
+    ) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         for attempt in range(retry_count + 1):
             try:
-                async with session.post(url, headers=headers, json=payload) as response:
+                async with session.post(
+                    url,
+                    headers=headers,
+                    **request_kwargs(),
+                ) as response:
                     text = await response.text()
                     status = response.status
             except asyncio.TimeoutError as exc:
@@ -416,6 +515,44 @@ class Image2DrawClient:
         if not isinstance(parsed, dict):
             raise DrawError(f"{action}接口返回格式不正确。")
         return parsed
+
+    async def _materialize_output(
+        self,
+        session: Any,
+        output: ImageOutput,
+    ) -> ImageOutput:
+        if output.kind == "base64":
+            data = _decode_base64(output.value, "绘图接口返回的图片 base64 无效。")
+            detect_image_mime(data)
+            return ImageOutput("base64", base64.b64encode(data).decode("ascii"))
+
+        try:
+            async with session.get(output.value) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise DrawError(
+                        f"下载生成图片失败：HTTP {response.status}。"
+                    )
+                if (
+                    response.content_length
+                    and response.content_length > MAX_IMAGE_BYTES
+                ):
+                    raise DrawError("生成图片不能超过 20 MB。")
+                data = await response.content.read(MAX_IMAGE_BYTES + 1)
+        except asyncio.TimeoutError as exc:
+            raise DrawError(
+                "下载生成图片超时；上游返回了远程 URL，但服务器无法及时访问。"
+            ) from exc
+        except Exception as exc:
+            if isinstance(exc, DrawError):
+                raise
+            if aiohttp is not None and isinstance(exc, aiohttp.ClientError):
+                raise DrawError("下载生成图片连接失败。") from exc
+            raise
+
+        if len(data) > MAX_IMAGE_BYTES:
+            raise DrawError("生成图片不能超过 20 MB。")
+        detect_image_mime(data, output.value)
+        return ImageOutput("base64", base64.b64encode(data).decode("ascii"))
 
 
 def _validate_api_url(url: str, label: str) -> None:
@@ -500,6 +637,19 @@ def _decode_base64(value: str, error_message: str) -> bytes:
         return base64.b64decode(re.sub(r"\s+", "", value), validate=True)
     except (binascii.Error, ValueError) as exc:
         raise DrawError(error_message) from exc
+
+
+def _decode_image_data_url(value: str) -> tuple[str, bytes]:
+    match = re.fullmatch(
+        r"data:(image/[A-Za-z0-9.+-]+);base64,(.+)",
+        value,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        raise DrawError("参考图片数据格式无效。")
+    data = _decode_base64(match.group(2), "参考图片 base64 无效。")
+    mime = detect_image_mime(data)
+    return mime, data
 
 
 def _local_path_from_ref(ref: str) -> Path:

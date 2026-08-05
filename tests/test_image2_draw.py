@@ -10,6 +10,7 @@ import image2_draw
 from image2_draw import (
     DrawError,
     Image2DrawClient,
+    ImageOutput,
     build_draw_request,
     build_openai_images_request,
     build_optimizer_request,
@@ -45,9 +46,11 @@ class _PostSession:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = 0
+        self.requests = []
 
-    def post(self, _url, **_kwargs):
+    def post(self, url, **kwargs):
         self.calls += 1
+        self.requests.append((url, kwargs))
         return self.responses.pop(0)
 
     async def __aenter__(self):
@@ -55,6 +58,45 @@ class _PostSession:
 
     async def __aexit__(self, _exc_type, _exc, _traceback):
         return False
+
+
+class _GetContent:
+    def __init__(self, data):
+        self.data = data
+
+    async def read(self, _limit):
+        return self.data
+
+
+class _GetResponse:
+    def __init__(self, data, status=200):
+        self.status = status
+        self.content_length = len(data)
+        self.content = _GetContent(data)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        return False
+
+
+class _GetSession:
+    def __init__(self, response):
+        self.response = response
+        self.urls = []
+
+    def get(self, url, **_kwargs):
+        self.urls.append(url)
+        return self.response
+
+
+class _FormData:
+    def __init__(self):
+        self.fields = []
+
+    def add_field(self, name, value, **kwargs):
+        self.fields.append((name, value, kwargs))
 
 
 class PromptTests(unittest.TestCase):
@@ -98,12 +140,14 @@ class RequestTests(unittest.TestCase):
         )
 
     def test_builds_openai_images_request(self):
-        payload = build_openai_images_request("gpt-image-2", "画一只猫")
+        payload = build_openai_images_request("gpt-image-2", "画一只猫", "4K")
         self.assertEqual(
             payload,
             {
                 "model": "gpt-image-2",
                 "prompt": "画一只猫",
+                "size": "4K",
+                "response_format": "b64_json",
             },
         )
 
@@ -200,6 +244,96 @@ class ImageTests(unittest.TestCase):
     def test_builds_data_url(self):
         result = image_bytes_to_data_url(PNG_BYTES)
         self.assertTrue(result.startswith("data:image/png;base64,"))
+
+
+class DeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_remote_result_is_downloaded_before_sending(self):
+        client = Image2DrawClient(
+            api_url="https://gateway.example.com/v1/images/generations",
+            api_key="test-key",
+            model="gpt-image-2",
+        )
+        session = _GetSession(_GetResponse(PNG_BYTES))
+
+        output = await client._materialize_output(
+            session,
+            ImageOutput("url", "https://cdn.example.com/result.png"),
+        )
+
+        self.assertEqual(output.kind, "base64")
+        self.assertEqual(base64.b64decode(output.value), PNG_BYTES)
+        self.assertEqual(session.urls, ["https://cdn.example.com/result.png"])
+
+    async def test_image_edit_uses_multipart_form(self):
+        client = Image2DrawClient(
+            api_url="https://gateway.example.com/v1/images/generations",
+            edit_api_url="https://gateway.example.com/v1/images/edits",
+            api_key="test-key",
+            model="gpt-image-2",
+            draw_protocol="openai_images",
+            image_resolution="4K",
+        )
+        session = _PostSession([_PostResponse(200, '{"data": []}')])
+        encoded = base64.b64encode(PNG_BYTES).decode("ascii")
+        aiohttp_stub = types.SimpleNamespace(FormData=_FormData)
+
+        with patch.object(image2_draw, "aiohttp", aiohttp_stub):
+            await client._post_image_edit(
+                session,
+                "https://gateway.example.com/v1/images/edits",
+                f"data:image/png;base64,{encoded}",
+                "改成红色",
+            )
+
+        url, request = session.requests[0]
+        fields = {name: (value, kwargs) for name, value, kwargs in request["data"].fields}
+        self.assertEqual(url, "https://gateway.example.com/v1/images/edits")
+        self.assertEqual(fields["model"][0], "gpt-image-2")
+        self.assertEqual(fields["prompt"][0], "改成红色")
+        self.assertEqual(fields["size"][0], "4K")
+        self.assertEqual(fields["response_format"][0], "b64_json")
+        self.assertEqual(fields["image"][0], PNG_BYTES)
+        self.assertEqual(fields["image"][1]["content_type"], "image/png")
+
+    async def test_openai_images_reference_uses_edit_endpoint(self):
+        client = Image2DrawClient(
+            api_url="https://gateway.example.com/v1/images/generations",
+            edit_api_url="https://gateway.example.com/v1/images/edits",
+            api_key="test-key",
+            model="gpt-image-2",
+            draw_protocol="openai_images",
+            image_resolution="4K",
+        )
+        session = _PostSession([])
+        encoded = base64.b64encode(PNG_BYTES).decode("ascii")
+        aiohttp_stub = types.SimpleNamespace(
+            ClientTimeout=lambda **_kwargs: object(),
+            ClientSession=lambda **_kwargs: session,
+        )
+
+        with (
+            patch.object(image2_draw, "aiohttp", aiohttp_stub),
+            patch.object(
+                client,
+                "_load_image_data_url",
+                AsyncMock(return_value=f"data:image/png;base64,{encoded}"),
+            ),
+            patch.object(
+                client,
+                "_post_image_edit",
+                AsyncMock(return_value={"data": [{"b64_json": encoded}]}),
+            ) as edit_request,
+        ):
+            output, final_prompt = await client.draw("改成红色", "source.png")
+
+        self.assertEqual(output.kind, "base64")
+        self.assertEqual(final_prompt, "改成红色")
+        edit_request.assert_awaited_once_with(
+            session,
+            "https://gateway.example.com/v1/images/edits",
+            f"data:image/png;base64,{encoded}",
+            "改成红色",
+        )
 
 
 class ConfigTests(unittest.TestCase):
@@ -304,25 +438,53 @@ class ConfigTests(unittest.TestCase):
     def test_openai_images_protocol_accepts_images_generation_endpoint(self):
         client = Image2DrawClient(
             api_url="https://gateway.example.com/v1/images/generations",
+            edit_api_url="https://gateway.example.com/v1/images/edits",
             api_key="test-key",
             model="gpt-image-2",
             draw_protocol="openai_images",
+            image_resolution="2K",
         )
         self.assertEqual(
             client.api_url,
             "https://gateway.example.com/v1/images/generations",
         )
+        self.assertEqual(
+            client.edit_api_url,
+            "https://gateway.example.com/v1/images/edits",
+        )
+        self.assertEqual(client.image_resolution, "2K")
         client.validate_config()
 
-    def test_openai_images_protocol_rejects_reference_image(self):
+    def test_openai_images_reference_requires_edit_endpoint(self):
         client = Image2DrawClient(
             api_url="https://gateway.example.com/v1/images/generations",
             api_key="test-key",
             model="gpt-image-2",
             draw_protocol="openai_images",
         )
-        with self.assertRaisesRegex(DrawError, "不支持参考图"):
+        with self.assertRaisesRegex(DrawError, "编辑 API 地址"):
             client.validate_config("改图", True)
+
+    def test_openai_images_reference_accepts_edit_endpoint(self):
+        client = Image2DrawClient(
+            api_url="https://gateway.example.com/v1/images/generations",
+            edit_api_url="https://gateway.example.com/v1/images/edits",
+            api_key="test-key",
+            model="gpt-image-2",
+            draw_protocol="openai_images",
+        )
+        client.validate_config("改图", True)
+
+    def test_rejects_unknown_image_resolution(self):
+        client = Image2DrawClient(
+            api_url="https://gateway.example.com/v1/images/generations",
+            api_key="test-key",
+            model="gpt-image-2",
+            draw_protocol="openai_images",
+            image_resolution="8K",
+        )
+        with self.assertRaisesRegex(DrawError, "图片清晰度"):
+            client.validate_config()
 
     def test_rejects_unknown_draw_protocol(self):
         client = Image2DrawClient(

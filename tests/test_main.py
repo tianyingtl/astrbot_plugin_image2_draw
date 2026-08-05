@@ -323,7 +323,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0].value, "开始优化喵")
         self.assertIn("优化后的提示词", results[1].value)
 
-    async def test_openai_images_reference_does_not_send_started_message(self):
+    async def test_openai_images_reference_requires_edit_endpoint(self):
         plugin = main.Image2DrawPlugin(
             _Context(),
             {
@@ -338,7 +338,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
 
         result = await anext(generator)
         self.assertEqual(result.kind, "plain")
-        self.assertIn("不支持参考图", result.value)
+        self.assertIn("编辑 API 地址", result.value)
         self.assertNotEqual(result.value, "开始绘画喵")
 
         with self.assertRaises(StopAsyncIteration):

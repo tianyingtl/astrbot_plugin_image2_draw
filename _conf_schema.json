@@ -1,9 +1,15 @@
 {
   "image_api_url": {
-    "description": "绘图 API 地址",
+    "description": "图片生成 API 地址",
     "type": "string",
     "default": "",
-    "hint": "按服务商后台显示的入站端点原样填写完整地址，插件不会补全或改写路径。openai_chat 常见为 /v1/chat/completions；openai_images 常见为 /v1/images/generations。"
+    "hint": "按服务商后台显示的入站端点原样填写完整地址。openai_chat 常见为 /v1/chat/completions；openai_images 填写 /v1/images/generations。"
+  },
+  "image_edit_api_url": {
+    "description": "图片编辑 API 地址",
+    "type": "string",
+    "default": "",
+    "hint": "仅在 openai_images 协议下附图修改时使用，填写服务商显示的完整 /v1/images/edits 地址；只做文字生图时可留空。"
   },
   "image_api_protocol": {
     "description": "绘图接口协议",
@@ -27,6 +33,17 @@
     "type": "string",
     "default": "",
     "hint": "填写绘图接口实际提供的模型名。"
+  },
+  "image_resolution": {
+    "description": "图片清晰度",
+    "type": "string",
+    "default": "4K",
+    "options": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "hint": "openai_images 生成和编辑请求使用的 size，默认 4K；需要所选模型和服务商支持。"
   },
   "request_timeout_seconds": {
     "description": "最大等待时间（秒）",
