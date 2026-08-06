@@ -3,7 +3,7 @@
 <div align="center">
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)
-![Version](https://img.shields.io/badge/version-v1.0.8-green)
+![Version](https://img.shields.io/badge/version-v1.0.9-green)
 ![Platform](https://img.shields.io/badge/platform-Multi--platform-lightgrey)
 
 Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，也可以附带或回复图片进行参考图修改。
@@ -87,7 +87,7 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 | `image_api_protocol` | 是 | `openai_chat` 使用 Chat 请求体；`openai_images` 自动按是否附图选择生成或编辑端点 |
 | `image_api_key` | 是 | 绘图服务 API Key |
 | `image_model` | 是 | 绘图模型名，例如 `gpt-image-2` |
-| `image_resolution` | 是 | Images 生成和编辑使用的清晰度，默认 `4K`，可选 `1K`、`2K`、`4K` |
+| `image_resolution` | 是 | Images 生成和编辑使用的清晰度，默认 `4K`；请求值会转换成对应的像素尺寸 |
 | `request_timeout_seconds` | 是 | 单次请求最大等待时间，默认 240 秒，可填写 1 到 3600 |
 | `draw_retry_count` | 否 | 绘图接口返回 502 或 524 时的重试次数，默认 0，可填写 0 到 3；可能重复生成或计费 |
 | `whitelist_groups` | 否 | 可使用 `/draw` 的 QQ 群号；留空允许所有群，私聊不受限制 |
@@ -119,7 +119,7 @@ image_edit_api_url = https://服务商地址/v1/images/edits
 image_resolution = 4K
 ```
 
-无附图时插件调用 `generations`；同消息附图或回复图片时调用 `edits`。编辑请求使用 OpenAI Images 标准 multipart 表单。清晰度会作为 `size` 发送，所选模型和服务商需要支持对应值。
+无附图时插件调用 `generations`；同消息附图或回复图片时调用 `edits`。编辑请求使用 OpenAI Images 标准 multipart 表单。清晰度会在请求中转换为：`1K -> 1024x1024`、`2K -> 2048x2048`、`4K -> 4096x4096`。
 
 群白名单只限制 `/draw`：不填写 `whitelist_groups` 时所有群都能绘图；填写后只有名单内的群能绘图，私聊始终可用。每日次数按用户 QQ 号统计，跨群与私聊共用，服务器日期变化后自动重置。`unlimited_users` 中的用户不受次数限制，但不能绕过群白名单。
 
@@ -166,6 +166,11 @@ data/config/astrbot_plugin_image2_draw_config.json
 图片模型通常比文本模型耗时更长。插件单次请求超时为 240 秒。
 
 ## 更新日志
+
+### v1.0.9
+
+- 修复 Images 清晰度参数：`1K`、`2K`、`4K` 分别转换为 `1024x1024`、`2048x2048`、`4096x4096`。
+- 生成和编辑接口统一使用转换后的像素尺寸。
 
 ### v1.0.8
 

@@ -43,7 +43,7 @@
       "2K",
       "4K"
     ],
-    "hint": "openai_images 生成和编辑请求使用的 size，默认 4K；需要所选模型和服务商支持。"
+    "hint": "默认 4K。发送请求时会转换为 1K=1024x1024、2K=2048x2048、4K=4096x4096；需要所选模型和服务商支持。"
   },
   "request_timeout_seconds": {
     "description": "最大等待时间（秒）",

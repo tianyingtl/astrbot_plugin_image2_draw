@@ -146,10 +146,25 @@ class RequestTests(unittest.TestCase):
             {
                 "model": "gpt-image-2",
                 "prompt": "画一只猫",
-                "size": "4K",
+                "size": "4096x4096",
                 "response_format": "b64_json",
             },
         )
+
+    def test_maps_resolution_labels_to_api_dimensions(self):
+        cases = {
+            "1K": "1024x1024",
+            "2K": "2048x2048",
+            "4K": "4096x4096",
+        }
+        for resolution, expected_size in cases.items():
+            with self.subTest(resolution=resolution):
+                payload = build_openai_images_request(
+                    "gpt-image-2",
+                    "测试",
+                    resolution,
+                )
+                self.assertEqual(payload["size"], expected_size)
 
     def test_optimizer_does_not_restrict_model_vendor(self):
         payload = build_optimizer_request("deepseek-chat", "画一只猫")
@@ -290,7 +305,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(url, "https://gateway.example.com/v1/images/edits")
         self.assertEqual(fields["model"][0], "gpt-image-2")
         self.assertEqual(fields["prompt"][0], "改成红色")
-        self.assertEqual(fields["size"][0], "4K")
+        self.assertEqual(fields["size"][0], "4096x4096")
         self.assertEqual(fields["response_format"][0], "b64_json")
         self.assertEqual(fields["image"][0], PNG_BYTES)
         self.assertEqual(fields["image"][1]["content_type"], "image/png")

@@ -30,7 +30,11 @@ SUPPORTED_DRAW_PROTOCOLS = {
     DRAW_PROTOCOL_OPENAI_CHAT,
     DRAW_PROTOCOL_OPENAI_IMAGES,
 }
-SUPPORTED_IMAGE_RESOLUTIONS = {"1K", "2K", "4K"}
+IMAGE_RESOLUTION_SIZES = {
+    "1K": "1024x1024",
+    "2K": "2048x2048",
+    "4K": "4096x4096",
+}
 
 
 class DrawError(Exception):
@@ -89,7 +93,7 @@ def build_openai_images_request(
     return {
         "model": model,
         "prompt": prompt,
-        "size": image_resolution,
+        "size": IMAGE_RESOLUTION_SIZES[image_resolution],
         "response_format": "b64_json",
     }
 
@@ -308,7 +312,7 @@ class Image2DrawClient:
         if self.draw_protocol not in SUPPORTED_DRAW_PROTOCOLS:
             raise DrawError("绘图接口协议只支持 openai_chat 或 openai_images。")
         if self.draw_protocol == DRAW_PROTOCOL_OPENAI_IMAGES:
-            if self.image_resolution not in SUPPORTED_IMAGE_RESOLUTIONS:
+            if self.image_resolution not in IMAGE_RESOLUTION_SIZES:
                 raise DrawError("图片清晰度只支持 1K、2K 或 4K。")
             if has_reference_image:
                 if not self.edit_api_url:
@@ -435,7 +439,7 @@ class Image2DrawClient:
             form = aiohttp.FormData()
             form.add_field("model", self.model)
             form.add_field("prompt", prompt)
-            form.add_field("size", self.image_resolution)
+            form.add_field("size", IMAGE_RESOLUTION_SIZES[self.image_resolution])
             form.add_field("response_format", "b64_json")
             form.add_field(
                 "image",
