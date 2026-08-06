@@ -3,7 +3,7 @@
 <div align="center">
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)
-![Version](https://img.shields.io/badge/version-v1.0.12-green)
+![Version](https://img.shields.io/badge/version-v1.0.13-green)
 ![Platform](https://img.shields.io/badge/platform-Multi--platform-lightgrey)
 
 Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，也可以附带或回复图片进行参考图修改。
@@ -151,7 +151,7 @@ data/config/astrbot_plugin_image2_draw_config.json
 
 ### 为什么提示“响应中没有找到图片”？
 
-请先更新到 `v1.0.12`。新版能够读取放在 `result`、`image` 和对象形式 `data` 中的图片。若接口确实没有返回图片，错误消息只会显示安全的响应字段和任务状态，方便判断是否返回了异步任务；不会显示提示词、任务 ID、API Key 或图片 base64。
+请先更新到 `v1.0.13`。新版能够读取放在 `result`、`image` 和对象形式 `data` 中的图片。如果接口用 HTTP 200 包装了 `error`，插件会显示经过脱敏的真实错误原因；其他无图片响应只显示安全的字段名和任务状态，不会显示提示词、任务 ID、API Key 或图片 base64。
 
 ### 为什么生成成功却没有发出图片？
 
@@ -170,6 +170,10 @@ data/config/astrbot_plugin_image2_draw_config.json
 图片模型通常比文本模型耗时更长。插件单次请求超时为 240 秒。
 
 ## 更新日志
+
+### v1.0.13
+
+- 修复接口用 HTTP 200 返回 `error` 时只显示“没有找到图片”的问题，现在会显示经过脱敏的真实错误原因。
 
 ### v1.0.12
 

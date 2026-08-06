@@ -269,6 +269,23 @@ class ResponseTests(unittest.TestCase):
         self.assertNotIn("private prompt", message)
         self.assertNotIn("sk-private-key", message)
 
+    def test_http_200_error_payload_reports_sanitized_reason(self):
+        payload = {
+            "error": {
+                "message": (
+                    "upstream rejected sk-private-key "
+                    "https://api.example.com/path?token=private"
+                )
+            }
+        }
+        with self.assertRaises(DrawError) as context:
+            extract_image_output(payload)
+
+        message = str(context.exception)
+        self.assertIn("绘图接口返回错误：upstream rejected", message)
+        self.assertNotIn("sk-private-key", message)
+        self.assertNotIn("token=private", message)
+
     def test_parses_optimizer_text_array(self):
         payload = {
             "choices": [

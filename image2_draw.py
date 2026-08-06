@@ -144,6 +144,12 @@ def extract_image_output(payload: dict[str, Any]) -> ImageOutput:
     if output:
         return output
 
+    if "error" in payload:
+        detail = _payload_error_detail(payload)
+        if detail:
+            raise DrawError(f"绘图接口返回错误：{detail}")
+        raise DrawError("绘图接口返回错误，但没有提供可读的错误原因。")
+
     shape = _response_shape_summary(payload)
     raise DrawError(f"绘图接口返回成功，但响应中没有找到图片（{shape}）。")
 
@@ -696,10 +702,16 @@ def _response_error_detail(text: str) -> str:
     except json.JSONDecodeError:
         return _sanitize_error_detail(text)
 
-    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return ""
+    return _payload_error_detail(payload)
+
+
+def _payload_error_detail(payload: dict[str, Any]) -> str:
+    error = payload.get("error")
     if isinstance(error, dict):
         error = error.get("message") or error.get("detail") or error.get("code")
-    if error is None and isinstance(payload, dict):
+    if error is None:
         error = payload.get("message") or payload.get("detail")
     return _sanitize_error_detail(str(error or ""))
 
