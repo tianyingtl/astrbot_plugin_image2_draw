@@ -226,9 +226,48 @@ class ResponseTests(unittest.TestCase):
         self.assertEqual(output.kind, "base64")
         self.assertEqual(output.value, encoded)
 
-    def test_rejects_response_without_image(self):
-        with self.assertRaises(DrawError):
-            extract_image_output({"choices": [{"message": {"content": "完成"}}]})
+    def test_extracts_image_from_nested_result(self):
+        payload = {
+            "result": {
+                "images": [{"url": "https://example.com/nested-result.png"}]
+            }
+        }
+        output = extract_image_output(payload)
+        self.assertEqual(output.kind, "url")
+        self.assertEqual(output.value, "https://example.com/nested-result.png")
+
+    def test_extracts_top_level_image(self):
+        payload = {"image": {"url": "https://example.com/top-level.webp"}}
+        output = extract_image_output(payload)
+        self.assertEqual(output.kind, "url")
+        self.assertEqual(output.value, "https://example.com/top-level.webp")
+
+    def test_extracts_image_from_object_data(self):
+        payload = {
+            "data": {
+                "result": {"url": "https://example.com/object-data.png"}
+            }
+        }
+        output = extract_image_output(payload)
+        self.assertEqual(output.kind, "url")
+        self.assertEqual(output.value, "https://example.com/object-data.png")
+
+    def test_missing_image_reports_safe_response_shape(self):
+        payload = {
+            "status": "processing",
+            "task_id": "private-task-id",
+            "prompt": "private prompt",
+            "api_key": "sk-private-key",
+        }
+        with self.assertRaises(DrawError) as context:
+            extract_image_output(payload)
+
+        message = str(context.exception)
+        self.assertIn("响应字段", message)
+        self.assertIn("status=processing", message)
+        self.assertNotIn("private-task-id", message)
+        self.assertNotIn("private prompt", message)
+        self.assertNotIn("sk-private-key", message)
 
     def test_parses_optimizer_text_array(self):
         payload = {

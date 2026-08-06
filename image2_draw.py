@@ -140,25 +140,12 @@ def parse_optimizer_response(payload: dict[str, Any]) -> str:
 
 
 def extract_image_output(payload: dict[str, Any]) -> ImageOutput:
-    candidates: list[Any] = []
+    output = _find_image_output(payload)
+    if output:
+        return output
 
-    for choice in payload.get("choices") or []:
-        if not isinstance(choice, dict):
-            continue
-        message = choice.get("message") or {}
-        if isinstance(message, dict):
-            candidates.extend(message.get("images") or [])
-            candidates.append(message.get("content"))
-
-    candidates.extend(payload.get("data") or [])
-    candidates.extend(payload.get("output") or [])
-
-    for candidate in candidates:
-        output = _find_image_output(candidate)
-        if output:
-            return output
-
-    raise DrawError("绘图接口返回成功，但响应中没有找到图片。")
+    shape = _response_shape_summary(payload)
+    raise DrawError(f"绘图接口返回成功，但响应中没有找到图片（{shape}）。")
 
 
 def image_bytes_to_data_url(data: bytes, source: str = "") -> str:
@@ -568,19 +555,64 @@ def _find_image_output(value: Any) -> ImageOutput | None:
     if not isinstance(value, dict):
         return None
 
-    for key in ("b64_json", "result"):
+    for key in ("b64_json", "base64", "image_base64", "result", "image"):
         candidate = value.get(key)
         if isinstance(candidate, str):
             output = _image_output_from_string(candidate, allow_raw_base64=True)
             if output:
                 return output
 
-    for key in ("image_url", "url", "images", "content", "data"):
+    for key in (
+        "choices",
+        "data",
+        "output",
+        "result",
+        "response",
+        "artifacts",
+        "image",
+        "images",
+        "image_url",
+        "url",
+        "content",
+        "message",
+    ):
         if key in value:
             output = _find_image_output(value[key])
             if output:
                 return output
     return None
+
+
+def _response_shape_summary(payload: dict[str, Any]) -> str:
+    keys = sorted(
+        {
+            str(key)
+            for key in payload
+            if re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", str(key))
+        }
+    )
+    shown_keys = keys[:12]
+    fields = ", ".join(shown_keys) if shown_keys else "无"
+    if len(keys) > len(shown_keys):
+        fields += ", ..."
+
+    parts = [f"响应字段：{fields}"]
+    status = payload.get("status")
+    if isinstance(status, str) and status.lower() in {
+        "queued",
+        "pending",
+        "processing",
+        "running",
+        "in_progress",
+        "completed",
+        "succeeded",
+        "success",
+        "failed",
+        "error",
+        "cancelled",
+    }:
+        parts.append(f"status={status.lower()}")
+    return "；".join(parts)
 
 
 def _image_output_from_string(
