@@ -256,6 +256,10 @@ class ImageTests(unittest.TestCase):
     def test_detects_png(self):
         self.assertEqual(detect_image_mime(PNG_BYTES), "image/png")
 
+    def test_rejects_non_image_even_when_url_has_image_suffix(self):
+        with self.assertRaisesRegex(DrawError, "无法识别参考图片内容"):
+            detect_image_mime(b"<html>not an image</html>", "https://example.com/error.jpg")
+
     def test_builds_data_url(self):
         result = image_bytes_to_data_url(PNG_BYTES)
         self.assertTrue(result.startswith("data:image/png;base64,"))
@@ -305,10 +309,32 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(url, "https://gateway.example.com/v1/images/edits")
         self.assertEqual(fields["model"][0], "gpt-image-2")
         self.assertEqual(fields["prompt"][0], "改成红色")
+        self.assertEqual(fields["n"][0], "1")
         self.assertEqual(fields["size"][0], "4096x4096")
         self.assertEqual(fields["response_format"][0], "b64_json")
-        self.assertEqual(fields["image"][0], PNG_BYTES)
-        self.assertEqual(fields["image"][1]["content_type"], "image/png")
+        self.assertEqual(fields["image[]"][0], PNG_BYTES)
+        self.assertEqual(fields["image[]"][1]["content_type"], "image/png")
+
+    async def test_image_edit_rejects_gif_before_request(self):
+        client = Image2DrawClient(
+            api_url="https://gateway.example.com/v1/images/generations",
+            edit_api_url="https://gateway.example.com/v1/images/edits",
+            api_key="test-key",
+            model="gpt-image-2",
+            draw_protocol="openai_images",
+        )
+        session = _PostSession([])
+        encoded = base64.b64encode(b"GIF89a" + (b"0" * 100)).decode("ascii")
+
+        with self.assertRaisesRegex(DrawError, "PNG、JPEG 或 WebP"):
+            await client._post_image_edit(
+                session,
+                "https://gateway.example.com/v1/images/edits",
+                f"data:image/gif;base64,{encoded}",
+                "改成红色",
+            )
+
+        self.assertEqual(session.calls, 0)
 
     async def test_openai_images_reference_uses_edit_endpoint(self):
         client = Image2DrawClient(

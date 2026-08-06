@@ -3,7 +3,7 @@
 <div align="center">
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)
-![Version](https://img.shields.io/badge/version-v1.0.9-green)
+![Version](https://img.shields.io/badge/version-v1.0.10-green)
 ![Platform](https://img.shields.io/badge/platform-Multi--platform-lightgrey)
 
 Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，也可以附带或回复图片进行参考图修改。
@@ -119,7 +119,7 @@ image_edit_api_url = https://服务商地址/v1/images/edits
 image_resolution = 4K
 ```
 
-无附图时插件调用 `generations`；同消息附图或回复图片时调用 `edits`。编辑请求使用 OpenAI Images 标准 multipart 表单。清晰度会在请求中转换为：`1K -> 1024x1024`、`2K -> 2048x2048`、`4K -> 4096x4096`。
+无附图时插件调用 `generations`；同消息附图或回复图片时调用 `edits`。编辑请求使用 multipart 表单，并按当前 OpenAI Images / PokeAPI 格式通过 `image[]` 上传参考图。清晰度会在请求中转换为：`1K -> 1024x1024`、`2K -> 2048x2048`、`4K -> 4096x4096`。
 
 群白名单只限制 `/draw`：不填写 `whitelist_groups` 时所有群都能绘图；填写后只有名单内的群能绘图，私聊始终可用。每日次数按用户 QQ 号统计，跨群与私聊共用，服务器日期变化后自动重置。`unlimited_users` 中的用户不受次数限制，但不能绕过群白名单。
 
@@ -141,7 +141,7 @@ data/config/astrbot_plugin_image2_draw_config.json
 
 请不要把这个配置文件、真实 API Key 或包含密钥的日志提交到公开仓库。参考图片会发送给你配置的绘图服务，请确认该服务的数据处理规则符合你的使用要求。
 
-单张参考图最大为 20 MB。AstrBot 生成的临时图片文件会由消息事件清理，不会写入插件仓库。
+图片编辑支持 PNG、JPEG 和 WebP 参考图，单张最大为 20 MB。插件会检查实际文件内容，不会只凭网址后缀把网页当成图片上传。AstrBot 生成的临时图片文件会由消息事件清理，不会写入插件仓库。
 
 ## 常见问题
 
@@ -166,6 +166,12 @@ data/config/astrbot_plugin_image2_draw_config.json
 图片模型通常比文本模型耗时更长。插件单次请求超时为 240 秒。
 
 ## 更新日志
+
+### v1.0.10
+
+- 修复 PokeAPI 图片编辑表单：参考图字段改为 `image[]`，并补充 `n=1`。
+- 上传前按文件内容校验参考图，避免把伪装成图片的错误网页交给绘图接口。
+- 图片编辑只接受 PokeAPI 文档支持的 PNG、JPEG 和 WebP。
 
 ### v1.0.9
 

@@ -181,17 +181,7 @@ def detect_image_mime(data: bytes, source: str = "") -> str:
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
 
-    suffix = Path(urlparse(source).path).suffix.lower()
-    suffix_types = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-    }
-    if suffix in suffix_types:
-        return suffix_types[suffix]
-    raise DrawError("无法识别参考图片格式，请使用 PNG、JPEG、GIF 或 WebP。")
+    raise DrawError("无法识别参考图片内容，请使用 PNG、JPEG、GIF 或 WebP。")
 
 
 class Image2DrawClient:
@@ -428,10 +418,11 @@ class Image2DrawClient:
         prompt: str,
     ) -> dict[str, Any]:
         mime, data = _decode_image_data_url(image_data_url)
+        if mime == "image/gif":
+            raise DrawError("图片编辑仅支持 PNG、JPEG 或 WebP 参考图。")
         suffix = {
             "image/png": ".png",
             "image/jpeg": ".jpg",
-            "image/gif": ".gif",
             "image/webp": ".webp",
         }[mime]
 
@@ -439,10 +430,11 @@ class Image2DrawClient:
             form = aiohttp.FormData()
             form.add_field("model", self.model)
             form.add_field("prompt", prompt)
+            form.add_field("n", "1")
             form.add_field("size", IMAGE_RESOLUTION_SIZES[self.image_resolution])
             form.add_field("response_format", "b64_json")
             form.add_field(
-                "image",
+                "image[]",
                 data,
                 filename=f"reference{suffix}",
                 content_type=mime,
