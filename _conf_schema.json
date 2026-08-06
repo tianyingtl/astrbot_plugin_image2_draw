@@ -19,7 +19,7 @@
       "openai_chat",
       "openai_images"
     ],
-    "hint": "按服务商页面的入站协议选择。openai_chat 使用 Chat 请求体并支持参考图；openai_images 使用 /v1/images/generations 的 model + prompt 请求体，只支持文字绘图。"
+    "hint": "按服务商页面的入站协议选择。openai_chat 使用 Chat 请求体；openai_images 无附图时调用 /v1/images/generations，附图时调用上方填写的 /v1/images/edits。"
   },
   "image_api_key": {
     "description": "绘图 API Key",
@@ -43,7 +43,7 @@
       "2K",
       "4K"
     ],
-    "hint": "默认 4K。发送请求时会转换为 1K=1024x1024、2K=2048x2048、4K=4096x4096；需要所选模型和服务商支持。"
+    "hint": "默认 4K，仅用于无参考图的文字生图：1K=1024x1024、2K=2048x2048、4K=4096x4096。参考图编辑由模型自动选择兼容尺寸，避免服务商因不支持指定尺寸而返回 400。"
   },
   "request_timeout_seconds": {
     "description": "最大等待时间（秒）",

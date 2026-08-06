@@ -3,7 +3,7 @@
 <div align="center">
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)
-![Version](https://img.shields.io/badge/version-v1.0.10-green)
+![Version](https://img.shields.io/badge/version-v1.0.11-green)
 ![Platform](https://img.shields.io/badge/platform-Multi--platform-lightgrey)
 
 Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，也可以附带或回复图片进行参考图修改。
@@ -119,7 +119,7 @@ image_edit_api_url = https://服务商地址/v1/images/edits
 image_resolution = 4K
 ```
 
-无附图时插件调用 `generations`；同消息附图或回复图片时调用 `edits`。编辑请求使用 multipart 表单，并按当前 OpenAI Images / PokeAPI 格式通过 `image[]` 上传参考图。清晰度会在请求中转换为：`1K -> 1024x1024`、`2K -> 2048x2048`、`4K -> 4096x4096`。
+无附图时插件调用 `generations`；同消息附图或回复图片时调用 `edits`。清晰度设置只作用于文字生图，会转换为：`1K -> 1024x1024`、`2K -> 2048x2048`、`4K -> 4096x4096`。参考图编辑由模型自动选择兼容尺寸，避免服务商拒绝不支持的编辑尺寸。
 
 群白名单只限制 `/draw`：不填写 `whitelist_groups` 时所有群都能绘图；填写后只有名单内的群能绘图，私聊始终可用。每日次数按用户 QQ 号统计，跨群与私聊共用，服务器日期变化后自动重置。`unlimited_users` 中的用户不受次数限制，但不能绕过群白名单。
 
@@ -157,6 +157,10 @@ data/config/astrbot_plugin_image2_draw_config.json
 
 旧版本会把上游返回的远程 URL 直接交给 AstrBot。服务器访问 S3 等图片存储超时时，日志会停在 `Prepare to send`，随后出现 `download_image_by_url` 的 `TimeoutError`。`v1.0.8` 起会优先请求 `b64_json`，并在必要时由插件先下载图片再发送。
 
+### 为什么附图修改返回 HTTP 400？
+
+请先更新到 `v1.0.11`。旧版本会把文字生图的清晰度参数直接用于图片编辑，部分模型会因此拒绝请求。新版会使用单张参考图格式上传，并让编辑模型自动选择兼容尺寸。参考图需要是 PNG、JPEG 或 WebP。
+
 ### 优化提示词只能用 OpenAI 模型吗？
 
 不是。模型厂商和模型名不受限制，但填写的接口需要兼容 OpenAI Chat JSON。
@@ -167,11 +171,16 @@ data/config/astrbot_plugin_image2_draw_config.json
 
 ## 更新日志
 
+### v1.0.11
+
+- 修复附带或回复图片进行修改时，PokeAPI 可能返回 HTTP 400 的问题。
+- 参考图编辑改为由模型选择兼容尺寸，文字生图的清晰度设置保持不变。
+- 已使用真实 JPG 和在线编辑接口验证，能够正常返回修改后的图片。
+
 ### v1.0.10
 
-- 修复 PokeAPI 图片编辑表单：参考图字段改为 `image[]`，并补充 `n=1`。
-- 上传前按文件内容校验参考图，避免把伪装成图片的错误网页交给绘图接口。
-- 图片编辑只接受 PokeAPI 文档支持的 PNG、JPEG 和 WebP。
+- 加强参考图读取检查，避免把错误网页误当成图片上传。
+- 图片编辑遇到不支持的格式时，会在请求前给出清楚提示。
 
 ### v1.0.9
 

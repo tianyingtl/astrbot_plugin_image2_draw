@@ -310,10 +310,10 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fields["model"][0], "gpt-image-2")
         self.assertEqual(fields["prompt"][0], "改成红色")
         self.assertEqual(fields["n"][0], "1")
-        self.assertEqual(fields["size"][0], "4096x4096")
+        self.assertNotIn("size", fields)
         self.assertEqual(fields["response_format"][0], "b64_json")
-        self.assertEqual(fields["image[]"][0], PNG_BYTES)
-        self.assertEqual(fields["image[]"][1]["content_type"], "image/png")
+        self.assertEqual(fields["image"][0], PNG_BYTES)
+        self.assertEqual(fields["image"][1]["content_type"], "image/png")
 
     async def test_image_edit_rejects_gif_before_request(self):
         client = Image2DrawClient(

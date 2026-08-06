@@ -431,10 +431,9 @@ class Image2DrawClient:
             form.add_field("model", self.model)
             form.add_field("prompt", prompt)
             form.add_field("n", "1")
-            form.add_field("size", IMAGE_RESOLUTION_SIZES[self.image_resolution])
             form.add_field("response_format", "b64_json")
             form.add_field(
-                "image[]",
+                "image",
                 data,
                 filename=f"reference{suffix}",
                 content_type=mime,
