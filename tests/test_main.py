@@ -24,6 +24,10 @@ class _Filter:
     def event_message_type(_event_type):
         return lambda function: function
 
+    @staticmethod
+    def llm_tool(name=None):
+        return lambda function: function
+
 
 class _Star:
     def __init__(self, context):
@@ -200,6 +204,26 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         event = _Event("今天试一下 /draw")
         results = await _collect(self.plugin.on_message(event))
         self.assertEqual(results, [])
+        self.assertFalse(event.stopped)
+
+    async def test_llm_tool_draws_with_the_model_generated_prompt(self):
+        event = _Event("@机器人 画一只猫", group_id="99999")
+        client = _SuccessfulClient()
+        client.draw = AsyncMock(
+            return_value=(
+                ImageOutput("url", "https://example.com/result.png"),
+                "模型整理后的完整提示词",
+            )
+        )
+
+        with patch.object(main, "_create_client", return_value=client):
+            results = await _collect(
+                self.plugin.image2_draw(event, "模型整理后的完整提示词")
+            )
+
+        self.assertEqual(results[0].value, "开始绘画喵")
+        self.assertEqual(results[1].kind, "url")
+        client.draw.assert_awaited_once_with("模型整理后的完整提示词", None)
         self.assertFalse(event.stopped)
 
     async def test_image_result_is_yielded_before_event_stops(self):
