@@ -105,21 +105,50 @@ class Image2DrawPlugin(Star):
             async for result in self.youhua(event):
                 yield result
 
-    async def draw(self, event: AstrMessageEvent):
+    @filter.llm_tool(name="image2_draw")
+    async def image2_draw(self, event: AstrMessageEvent, prompt: str):
+        """调用 Image2 绘图插件生成图片或修改参考图。
+
+        当用户明确要求画图、生成图片或修改图片时调用。先理解用户的要求，
+        自行整理成完整、具体的绘图提示词；当前消息附带或引用的图片会自动作为参考图。
+
+        Args:
+            prompt(string): 根据用户要求整理出的完整绘图或改图提示词。
+        """
+        async for result in self.draw(
+            event,
+            prompt_override=str(prompt or "").strip(),
+            stop_event=False,
+        ):
+            yield result
+
+    async def draw(
+        self,
+        event: AstrMessageEvent,
+        prompt_override: str | None = None,
+        *,
+        stop_event: bool = True,
+    ):
         if not self._draw_group_allowed(event):
             yield _reply_to_command_message(
                 event,
                 event.plain_result("本群未加入 Image2 绘图插件白名单。"),
             )
-            event.stop_event()
+            if stop_event:
+                event.stop_event()
             return
 
-        prompt = extract_draw_prompt(getattr(event, "message_str", ""))
+        prompt = (
+            prompt_override
+            if prompt_override is not None
+            else extract_draw_prompt(getattr(event, "message_str", ""))
+        )
         if not prompt:
             yield event.plain_result(
                 "用法：/draw <提示词>。可以在同一条消息附图，或回复一张图片后发送指令。"
             )
-            event.stop_event()
+            if stop_event:
+                event.stop_event()
             return
 
         client = _create_client(self.config)
@@ -147,7 +176,8 @@ class Image2DrawPlugin(Star):
                             f"你今天的绘图次数已用完（{used}/{daily_limit}）。"
                         ),
                     )
-                    event.stop_event()
+                    if stop_event:
+                        event.stop_event()
                     return
                 reserved_sender_id = sender_id
 
@@ -159,7 +189,8 @@ class Image2DrawPlugin(Star):
             yield _reply_to_command_message(
                 event, event.plain_result(f"绘图失败：{exc}")
             )
-            event.stop_event()
+            if stop_event:
+                event.stop_event()
             return
         except Exception:
             if reserved_sender_id:
@@ -171,7 +202,8 @@ class Image2DrawPlugin(Star):
                     "绘图失败：插件处理请求时发生异常，请查看 AstrBot 日志。"
                 ),
             )
-            event.stop_event()
+            if stop_event:
+                event.stop_event()
             return
 
         if output.kind == "base64":
@@ -179,7 +211,8 @@ class Image2DrawPlugin(Star):
         else:
             result = event.image_result(output.value)
         yield _reply_to_command_message(event, result)
-        event.stop_event()
+        if stop_event:
+            event.stop_event()
 
     async def youhua(self, event: AstrMessageEvent):
         prompt = extract_youhua_prompt(getattr(event, "message_str", ""))

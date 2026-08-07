@@ -3,7 +3,7 @@
 <div align="center">
 
 ![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue)
-![Version](https://img.shields.io/badge/version-v1.0.13-green)
+![Version](https://img.shields.io/badge/version-v1.0.14-green)
 ![Platform](https://img.shields.io/badge/platform-Multi--platform-lightgrey)
 
 Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，也可以附带或回复图片进行参考图修改。
@@ -28,6 +28,7 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 - 支持 OpenAI Chat 和 OpenAI Images 两种绘图请求协议；Images 协议可分别配置生成和编辑端点。
 - OpenAI Images 清晰度可选 `1K`、`2K`、`4K`，默认 `4K`。
 - 可选调用另一套模型优化文字提示词，不限制模型厂商。
+- 支持主模型通过 `image2_draw` 工具主动调用绘图和参考图编辑。
 - 支持图片 URL 和 base64 两种绘图响应。
 - API Key 只从 AstrBot WebUI 配置读取，不内置任何真实密钥。
 
@@ -41,6 +42,16 @@ Image2 绘图插件。支持在群聊或私聊中使用 `/draw` 文字绘图，�
 插件使用 AstrBot 已包含的 `aiohttp`，不需要额外安装依赖。要求 AstrBot `4.24.4` 或更高版本。
 
 ## 使用方法
+
+### 自然语言绘图
+
+在支持工具调用的主模型中，直接 @机器人提出绘图或改图要求：
+
+```text
+@机器人 画一只戴耳机的白猫
+```
+
+主模型会自行整理绘图提示词并调用 `image2_draw`；当前消息附带或引用的图片会自动作为参考图。该方式仍受绘图群白名单和每日次数限制。
 
 ### 文字绘图
 
@@ -151,7 +162,7 @@ data/config/astrbot_plugin_image2_draw_config.json
 
 ### 为什么提示“响应中没有找到图片”？
 
-请先更新到 `v1.0.13`。新版能够读取放在 `result`、`image` 和对象形式 `data` 中的图片。如果接口用 HTTP 200 包装了 `error`，插件会显示经过脱敏的真实错误原因；其他无图片响应只显示安全的字段名和任务状态，不会显示提示词、任务 ID、API Key 或图片 base64。
+请先更新到 `v1.0.14`。新版能够读取放在 `result`、`image` 和对象形式 `data` 中的图片。如果接口用 HTTP 200 包装了 `error`，插件会显示经过脱敏的真实错误原因；其他无图片响应只显示安全的字段名和任务状态，不会显示提示词、任务 ID、API Key 或图片 base64。
 
 ### 为什么生成成功却没有发出图片？
 
@@ -170,6 +181,12 @@ data/config/astrbot_plugin_image2_draw_config.json
 图片模型通常比文本模型耗时更长。插件单次请求超时为 240 秒。
 
 ## 更新日志
+
+### v1.0.14
+
+- 新增 `image2_draw` LLM 工具。
+- 支持主模型根据自然语言绘图请求自行整理提示词并主动调用插件。
+- 工具调用复用现有的参考图、群白名单、每日次数限制和失败退款逻辑。
 
 ### v1.0.13
 
