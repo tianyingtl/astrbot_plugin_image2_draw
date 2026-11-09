@@ -207,7 +207,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(event.stopped)
 
     async def test_help_and_preview_do_not_call_api_or_charge(self):
-        for text in ("/draw --help", "/draw 海边 916 2K --preview"):
+        for text in ("/draw --help", "/draw 海边 --9:16 -2K --preview"):
             with self.subTest(text=text), patch.object(main, "_create_client") as create:
                 event = _Event(text)
                 results = await _collect(self.plugin.on_message(event))
@@ -232,13 +232,13 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
 
     def test_llm_tool_documents_preview_and_colon_ratios(self):
         description = main.Image2DrawPlugin.image2_draw.__doc__
-        for text in ("--preview", "不调用接口", "不扣次数", "确认", "9:16"):
+        for text in ("--preview", "不调用接口", "不扣次数", "确认", "--9:16 -2K", "横杠"):
             self.assertIn(text, description)
 
     async def test_llm_tool_preview_does_not_call_api_or_charge(self):
         event = _Event("@机器人 先预览海边壁纸的参数，不要生成")
         with patch.object(main, "_create_client") as create:
-            results = await _collect(self.plugin.image2_draw(event, "海边 9:16 2K --preview"))
+            results = await _collect(self.plugin.image2_draw(event, "海边 --9:16 -2K --preview"))
         create.assert_not_called()
         self.assertEqual(len(results), 1)
         self.assertIn("1152x2048", results[0].value)
@@ -258,11 +258,11 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_suffix_works_with_mention_and_tool_and_reports_actual_size(self):
         client = _SuccessfulClient()
         client.draw = AsyncMock(return_value=(ImageOutput("url", "https://example.com/a.png"), ""))
-        event = _Event("@机器人 /draw 海边 916 2K")
+        event = _Event("@机器人 /draw 海边 --9:16 -2K")
         with patch.object(main, "_create_client", return_value=client):
             results = await _collect(self.plugin.on_message(event))
             self.assertIn("1152x2048", results[0].value)
-            client.draw.assert_awaited_once_with("海边 916 2K", None)
+            client.draw.assert_awaited_once_with("海边 --9:16 -2K", None)
             # The tool shares command quotas instead of bypassing them.
             blocked = await _collect(self.plugin.image2_draw(_Event("画海边"), "海边 --ar 916"))
             self.assertIn("次数已用完", blocked[0].value)

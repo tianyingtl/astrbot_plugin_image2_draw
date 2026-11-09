@@ -152,7 +152,7 @@ class PromptTests(unittest.TestCase):
         for alias, ratio in image2_draw.ASPECT_RATIO_ALIASES.items():
             for resolution in ("1K", "2K", "4K"):
                 with self.subTest(alias=alias, resolution=resolution):
-                    prompt, options = parse_draw_options(f"城市 {alias} {resolution}")
+                    prompt, options = parse_draw_options(f"城市 --{alias} -{resolution}")
                     resolved = resolve_draw_options(options)
                     width, height = map(int, resolved.size.split("x"))
                     rw, rh = map(int, ratio.split(":"))
@@ -163,7 +163,7 @@ class PromptTests(unittest.TestCase):
                     self.assertLessEqual(max(width, height), int(resolution[:-1]) * 1024)
 
     def test_shorthands_quotes_and_aliases(self):
-        for suffix in ("--916 --size 2k", "--ratio=9:16 --resolution=2K", "916 2K", "9:16 2K", "--9:16 --size 2K"):
+        for suffix in ("--916 --size 2k", "--ratio=9:16 --resolution=2K", "--9:16 -2K", "--9:16 --2K", "-2k --9:16", "--9:16 --size 2K"):
             with self.subTest(suffix=suffix):
                 _, options = parse_draw_options(f"海边 {suffix}")
                 self.assertEqual(resolve_draw_options(options).size, "1152x2048")
@@ -173,7 +173,7 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(options.negative_prompt, "字 水印")
 
     def test_plain_prompt_and_literal_escape_are_preserved(self):
-        for prompt in ("画一张 don't panic 海报", '写上 "--ar 916" 这段文字', "第一行\n第二行"):
+        for prompt in ("画一张 don't panic 海报", '写上 "--ar 916" 这段文字', '写上 "-2K" 这段文字', "第一行\n第二行"):
             with self.subTest(prompt=prompt):
                 self.assertEqual(parse_draw_options(prompt), (prompt, image2_draw.DrawOptions()))
         self.assertEqual(
@@ -181,11 +181,31 @@ class PromptTests(unittest.TestCase):
             ("画号码 11 --style 这也是原文", image2_draw.DrawOptions()),
         )
 
+    def test_unprefixed_numbers_ratios_and_sizes_stay_in_prompt(self):
+        for suffix in (*image2_draw.ASPECT_RATIO_ALIASES, "1K", "2K", "4K", "1080x1920", "9:16 2K", "916 2K", "-20"):
+            with self.subTest(suffix=suffix):
+                text = f"海报上写着 {suffix}"
+                self.assertEqual(parse_draw_options(text), (text, image2_draw.DrawOptions()))
+        prompt, options = parse_draw_options("海报上写着 9:16 2K --style 水彩")
+        self.assertEqual(prompt, "海报上写着 9:16 2K")
+        self.assertIsNone(options.aspect_ratio)
+        self.assertIsNone(options.size)
+        self.assertEqual(options.style, "水彩")
+
+    def test_prefixed_resolution_without_ratio(self):
+        for label, size in image2_draw.IMAGE_RESOLUTION_SIZES.items():
+            for prefix in ("-", "--"):
+                with self.subTest(label=label, prefix=prefix):
+                    prompt, options = parse_draw_options(f"城市 {prefix}{label}")
+                    self.assertEqual(prompt, "城市")
+                    self.assertEqual(resolve_draw_options(options).size, size)
+
     def test_invalid_or_duplicate_flags_report_before_any_request(self):
         for suffix in (
             "--ar", "--ar --size 2K", "--style ''", "--style \"未闭合",
             "--unknown 1", "--ar 916 --ratio 916", "--size 2K stray",
             "--quality=", "--style '   '", "--no-optimize=yes",
+            "-2K --size 4K", "--2K -1K", "--ar 9:16 2K", "--style -2K", "-8K",
         ):
             with self.subTest(suffix=suffix), self.assertRaises(DrawError):
                 parse_draw_options("城市 " + suffix)
@@ -200,13 +220,13 @@ class PromptTests(unittest.TestCase):
                 resolve_draw_options(options)
 
     def test_ratio_uses_configured_resolution_and_explicit_size_overrides_it(self):
-        _, options = parse_draw_options("城市 916")
+        _, options = parse_draw_options("城市 --916")
         self.assertEqual(resolve_draw_options(options, "4K").size, "2304x4096")
         _, options = parse_draw_options("城市 --size 1080x1920 --ar 916")
         self.assertEqual(resolve_draw_options(options, "4K").size, "1080x1920")
         _, options = parse_draw_options("城市")
         self.assertEqual(resolve_draw_options(options, "1080x1920").size, "1080x1920")
-        _, options = parse_draw_options("城市 43")
+        _, options = parse_draw_options("城市 --43")
         self.assertEqual(resolve_draw_options(options, "1080x1920").size, "1920x1440")
 
     def test_style_and_negative_do_not_inject_square_dimensions(self):
@@ -614,11 +634,22 @@ class OptionDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("quality", fields)
 
     async def test_edit_colon_ratio_uses_default_resolution(self):
-        for suffix, expected in (("9:16", "2304x4096"), ("9:16 2K", "1152x2048")):
+        for suffix, expected in (("--9:16", "2304x4096"), ("--9:16 -2K", "1152x2048")):
             with self.subTest(suffix=suffix):
                 request, _, _ = await self.call_draw(f"换背景 {suffix}", image_ref="ref.png")
                 fields = {name: value for name, value, _ in request[1]["data"].fields}
                 self.assertEqual(fields["size"], expected)
+
+    async def test_unprefixed_size_preserves_prompt_and_configured_size(self):
+        for image_ref in (None, "ref.png"):
+            with self.subTest(image_ref=image_ref):
+                request, prompt, _ = await self.call_draw("海报上写着 9:16 2K", image_ref=image_ref, image_resolution="1K")
+                payload = request[1].get("json")
+                if payload is None:
+                    payload = {name: value for name, value, _ in request[1]["data"].fields}
+                self.assertEqual(prompt, "海报上写着 9:16 2K")
+                self.assertEqual(payload["prompt"], prompt)
+                self.assertEqual(payload["size"], "1024x1024")
 
     async def test_chat_keeps_standard_request_and_adds_text_constraints(self):
         request, prompt, _ = await self.call_draw(

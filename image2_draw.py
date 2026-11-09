@@ -134,9 +134,9 @@ def parse_draw_options(prompt: str | None) -> tuple[str, DrawOptions]:
         (
             match.start()
             for match in re.finditer(
-                r"""(?<!\S)(?:"[^"]*"|'[^']*')|(?<!\S)--\S+""", text
+                r"""(?<!\S)(?:"[^"]*"|'[^']*')|(?<!\S)(?:--\S+|-\d+[kK](?=\s|$))""", text
             )
-            if match.group().startswith("--")
+            if match.group().startswith("-")
         ),
         None,
     )
@@ -155,11 +155,13 @@ def parse_draw_options(prompt: str | None) -> tuple[str, DrawOptions]:
                 add("no_optimize" if flag == "--no-optimize" else "preview", True)
             elif flag.startswith("--") and flag[2:] in ASPECT_RATIO_ALIASES and not separator:
                 add("aspect_ratio", flag[2:])
+            elif re.fullmatch(r"--?[124]k", flag) and not separator:
+                add("size", flag.lstrip("-").upper())
             elif flag in aliases:
                 if not separator:
                     index += 1
                     value = tokens[index] if index < len(tokens) else ""
-                if not value.strip() or value.startswith("--"):
+                if not value.strip() or value.startswith("--") or re.fullmatch(r"-\d+[kK]", value):
                     raise DrawError(f"{flag} 缺少值；查看 /draw --help。")
                 add(aliases[flag], value)
             else:
@@ -168,19 +170,6 @@ def parse_draw_options(prompt: str | None) -> tuple[str, DrawOptions]:
                 )
             index += 1
 
-    # Convenient suffixes: "提示词 916 2K" or "提示词 1536x2048".
-    while text:
-        parts = text.rsplit(maxsplit=1)
-        if len(parts) != 2:
-            break
-        value = parts[1]
-        if value in ASPECT_RATIO_ALIASES:
-            add("aspect_ratio", value)
-        elif value.upper() in IMAGE_RESOLUTION_SIZES or CUSTOM_SIZE_PATTERN.fullmatch(value):
-            add("size", value)
-        else:
-            break
-        text = parts[0].rstrip()
     return text, DrawOptions(**values)
 
 
@@ -245,17 +234,18 @@ def apply_draw_options(
 
 DRAW_HELP = """用法：/draw <提示词> [后缀参数]
 例：/draw 海边城市 --ar 9:16 --size 2K
-直接写比例：/draw 海边城市 9:16 2K（也兼容 916 2K）
-只写比例：/draw 海边城市 9:16（沿用 WebUI 清晰度）
+短写：/draw 海边城市 --9:16 -2K（也支持 --2K）
+只写比例：/draw 海边城市 --9:16（沿用 WebUI 清晰度）
 自定义像素：/draw 海边城市 --size 1080x1920
-比例：1:1/4:3/3:4/16:9/9:16/3:2/2:3/21:9；兼容简写 11/43/34/169/916/32/23/219。
---ar/--ratio：比例；--size/--resolution：1K、2K、4K 或 宽x高。
+比例：--1:1/--4:3/--3:4/--16:9/--9:16/--3:2/--2:3/--21:9，也兼容 --916 等带横杠简写。
+--ar/--ratio：比例；-1K/-2K/-4K：清晰度；--size/--resolution：1K、2K、4K 或 宽x高。
+参数必须带横杠；裸写 9:16、916、2K、1080x1920 都是提示词，不会设置参数。
 预设清晰度按长边计算，保持精确比例并向下对齐到 16 像素；自定义宽高为 256～8192。
 --quality high：质量，可选 auto/low/medium/high（Images 需要模型支持）。
 --style "柔和 水彩"：风格；--negative "文字 水印"：希望避免的内容。
 --no-optimize：本次跳过额外提示词优化。
 --preview：只预览参数，不调用接口、不扣次数；删掉它后才会绘图。
-参数放在末尾，多字值请用引号；/draw -- 原文 可保留末尾数字和 -- 字样。
+参数放在末尾，多字值请用引号；/draw -- 原文 可把 --9:16、-2K 等也当作正文。
 可同消息附图或回复图片改图；Images 生图和编辑默认都传 WebUI 尺寸，后缀可覆盖。
 未写比例时预设尺寸为正方形（如 4K=4096x4096），不自动沿用参考图比例。
 Images 会传 size/quality；Chat 只追加文字约束。能否支持、最终比例是否一致取决于上游模型；报尺寸错误请换服务商支持的宽高。"""
