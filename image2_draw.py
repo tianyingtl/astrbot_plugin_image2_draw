@@ -245,10 +245,10 @@ def apply_draw_options(
 
 DRAW_HELP = """用法：/draw <提示词> [后缀参数]
 例：/draw 海边城市 --ar 9:16 --size 2K
-简写：/draw 海边城市 916 2K
-只写比例：/draw 海边城市 916（沿用 WebUI 清晰度）
+直接写比例：/draw 海边城市 9:16 2K（也兼容 916 2K）
+只写比例：/draw 海边城市 9:16（沿用 WebUI 清晰度）
 自定义像素：/draw 海边城市 --size 1080x1920
-比例：11/43/34/169/916/32/23/219，也可写 1:1/4:3/3:4/16:9/9:16/3:2/2:3/21:9。
+比例：1:1/4:3/3:4/16:9/9:16/3:2/2:3/21:9；兼容简写 11/43/34/169/916/32/23/219。
 --ar/--ratio：比例；--size/--resolution：1K、2K、4K 或 宽x高。
 预设清晰度按长边计算，保持精确比例并向下对齐到 16 像素；自定义宽高为 256～8192。
 --quality high：质量，可选 auto/low/medium/high（Images 需要模型支持）。
@@ -256,7 +256,8 @@ DRAW_HELP = """用法：/draw <提示词> [后缀参数]
 --no-optimize：本次跳过额外提示词优化。
 --preview：只预览参数，不调用接口、不扣次数；删掉它后才会绘图。
 参数放在末尾，多字值请用引号；/draw -- 原文 可保留末尾数字和 -- 字样。
-可同消息附图或回复图片改图；显式指定尺寸时也会传给编辑接口。
+可同消息附图或回复图片改图；Images 生图和编辑默认都传 WebUI 尺寸，后缀可覆盖。
+未写比例时预设尺寸为正方形（如 4K=4096x4096），不自动沿用参考图比例。
 Images 会传 size/quality；Chat 只追加文字约束。能否支持、最终比例是否一致取决于上游模型；报尺寸错误请换服务商支持的宽高。"""
 
 
@@ -470,9 +471,7 @@ class Image2DrawClient:
                     image_data_url = await self._load_image_data_url(
                         session, image_ref
                     )
-                    edit_options = {}
-                    if draw_options.aspect_ratio or draw_options.size:
-                        edit_options["image_size"] = resolved_options.size
+                    edit_options = {"image_size": resolved_options.size}
                     if resolved_options.quality:
                         edit_options["quality"] = resolved_options.quality
                     response = await self._post_image_edit(

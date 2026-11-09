@@ -117,11 +117,14 @@ class Image2DrawPlugin(Star):
     async def image2_draw(self, event: AstrMessageEvent, prompt: str):
         """调用 Image2 绘图插件生成图片或修改参考图。
 
-        当用户明确要求画图、生成图片或修改图片时调用。先理解用户的要求，
+        当用户明确要求画图、生成图片、修改图片或预览绘图参数时调用。先理解用户的要求，
         自行整理成完整、具体的绘图提示词；当前消息附带或引用的图片会自动作为参考图。
         用户指定比例/尺寸时在提示词末尾附加 --ar 9:16 --size 2K，支持比例
         1:1、4:3、3:4、16:9、9:16、3:2、2:3、21:9；尺寸也可写 1080x1920。
         可用 --style "水彩"、--negative "文字 水印"、--quality high、--no-optimize。
+        也可直接在末尾写 9:16 2K；未指定尺寸时 Images 生图和编辑都使用 WebUI 默认尺寸。
+        用户只要求预览参数时，必须在末尾加 --preview：只返回参数，不调用接口、不扣次数，
+        不是图片小样，也不验证服务商支持情况。预览后等待用户明确确认生成，不要自动再调用绘图。
 
         Args:
             prompt(string): 根据用户要求整理出的完整绘图或改图提示词。
@@ -172,8 +175,8 @@ class Image2DrawPlugin(Star):
                 details = format_draw_options_notice(draw_options, resolved_options, protocol)
                 if not (draw_options.aspect_ratio or draw_options.size):
                     details = (
-                        "\n未指定尺寸：Images 文字生图使用 "
-                        f"{resolved_options.size}，Chat 和参考图编辑由模型决定。"
+                        "\n未指定尺寸：Images 文字生图和图片编辑使用 "
+                        f"{resolved_options.size}，Chat 由模型决定。"
                     ) + details
                 yield _reply_to_command_message(
                     event,

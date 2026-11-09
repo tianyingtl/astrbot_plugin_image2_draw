@@ -230,6 +230,31 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("绘图失败", results[0].value)
                 self.assertFalse(self.plugin.usage_store.path.exists())
 
+    def test_llm_tool_documents_preview_and_colon_ratios(self):
+        description = main.Image2DrawPlugin.image2_draw.__doc__
+        for text in ("--preview", "不调用接口", "不扣次数", "确认", "9:16"):
+            self.assertIn(text, description)
+
+    async def test_llm_tool_preview_does_not_call_api_or_charge(self):
+        event = _Event("@机器人 先预览海边壁纸的参数，不要生成")
+        with patch.object(main, "_create_client") as create:
+            results = await _collect(self.plugin.image2_draw(event, "海边 9:16 2K --preview"))
+        create.assert_not_called()
+        self.assertEqual(len(results), 1)
+        self.assertIn("1152x2048", results[0].value)
+        self.assertIn("未调用接口", results[0].value)
+        self.assertFalse(self.plugin.usage_store.path.exists())
+        self.assertFalse(event.stopped)
+
+    async def test_default_preview_reports_images_edit_size(self):
+        self.plugin.config["image_api_protocol"] = "openai_images"
+        self.plugin.config["image_resolution"] = "1080x1920"
+        with patch.object(main, "_create_client") as create:
+            results = await _collect(self.plugin.draw(_Event("/draw 换背景 --preview")))
+        create.assert_not_called()
+        self.assertIn("文字生图和图片编辑使用 1080x1920", results[0].value)
+        self.assertNotIn("参考图编辑由模型决定", results[0].value)
+
     async def test_suffix_works_with_mention_and_tool_and_reports_actual_size(self):
         client = _SuccessfulClient()
         client.draw = AsyncMock(return_value=(ImageOutput("url", "https://example.com/a.png"), ""))

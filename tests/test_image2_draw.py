@@ -163,7 +163,7 @@ class PromptTests(unittest.TestCase):
                     self.assertLessEqual(max(width, height), int(resolution[:-1]) * 1024)
 
     def test_shorthands_quotes_and_aliases(self):
-        for suffix in ("--916 --size 2k", "--ratio=9:16 --resolution=2K", "916 2K"):
+        for suffix in ("--916 --size 2k", "--ratio=9:16 --resolution=2K", "916 2K", "9:16 2K", "--9:16 --size 2K"):
             with self.subTest(suffix=suffix):
                 _, options = parse_draw_options(f"海边 {suffix}")
                 self.assertEqual(resolve_draw_options(options).size, "1152x2048")
@@ -541,6 +541,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
             "https://gateway.example.com/v1/images/edits",
             f"data:image/png;base64,{encoded}",
             "改成红色",
+            image_size="4096x4096",
         )
 
 
@@ -594,13 +595,30 @@ class OptionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fields["quality"], "low")
         self.assertEqual(fields["image"], PNG_BYTES)
 
-    async def test_edit_style_alone_preserves_automatic_size(self):
+    async def test_edit_style_alone_uses_default_size(self):
         request, prompt, _ = await self.call_draw("换背景 --style 水彩", image_ref="ref.png")
         fields = {name: value for name, value, _ in request[1]["data"].fields}
-        self.assertNotIn("size", fields)
+        self.assertEqual(fields["size"], "4096x4096")
         self.assertNotIn("quality", fields)
         self.assertNotIn("4096", prompt)
         self.assertIn("水彩", prompt)
+
+    async def test_edit_default_size_matches_generation(self):
+        for resolution, size in (("1K", "1024x1024"), ("2K", "2048x2048"), ("4K", "4096x4096"), ("1080x1920", "1080x1920")):
+            with self.subTest(resolution=resolution):
+                generation, _, _ = await self.call_draw("海边", image_resolution=resolution)
+                edit, _, _ = await self.call_draw("换背景", image_ref="ref.png", image_resolution=resolution)
+                fields = {name: value for name, value, _ in edit[1]["data"].fields}
+                self.assertEqual(fields["size"], size)
+                self.assertEqual(fields["size"], generation[1]["json"]["size"])
+                self.assertNotIn("quality", fields)
+
+    async def test_edit_colon_ratio_uses_default_resolution(self):
+        for suffix, expected in (("9:16", "2304x4096"), ("9:16 2K", "1152x2048")):
+            with self.subTest(suffix=suffix):
+                request, _, _ = await self.call_draw(f"换背景 {suffix}", image_ref="ref.png")
+                fields = {name: value for name, value, _ in request[1]["data"].fields}
+                self.assertEqual(fields["size"], expected)
 
     async def test_chat_keeps_standard_request_and_adds_text_constraints(self):
         request, prompt, _ = await self.call_draw(
