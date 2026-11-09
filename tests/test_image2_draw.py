@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import types
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -19,6 +20,8 @@ from image2_draw import (
     extract_youhua_prompt,
     extract_image_output,
     image_bytes_to_data_url,
+    parse_draw_options,
+    resolve_draw_options,
     parse_optimizer_response,
     _response_error_detail,
 )
@@ -118,6 +121,103 @@ class PromptTests(unittest.TestCase):
             "画一只戴耳机的白猫",
         )
 
+    def test_parses_draw_options_from_suffix(self):
+        prompt, options = parse_draw_options(
+            '海边城市 --ar 916 --size 2K --quality high --negative "文字 水印"'
+        )
+        self.assertEqual(prompt, "海边城市")
+        self.assertEqual(options.aspect_ratio, "916")
+        self.assertEqual(options.size, "2K")
+        self.assertEqual(options.quality, "high")
+        self.assertEqual(options.negative_prompt, "文字 水印")
+
+    def test_resolves_portrait_ratio_to_exact_dimensions(self):
+        _prompt, options = parse_draw_options("猫 --ar 916 --size 2K")
+        resolved = resolve_draw_options(options)
+        self.assertEqual(resolved.aspect_ratio, "9:16")
+        self.assertEqual(resolved.size, "1152x2048")
+
+    def test_accepts_custom_dimensions(self):
+        _prompt, options = parse_draw_options("猫 --size 1536x2048")
+        resolved = resolve_draw_options(options)
+        self.assertEqual(resolved.aspect_ratio, "3:4")
+        self.assertEqual(resolved.size, "1536x2048")
+
+    def test_rejects_conflicting_ratio_and_custom_dimensions(self):
+        _prompt, options = parse_draw_options("猫 --ar 916 --size 1536x2048")
+        with self.assertRaisesRegex(DrawError, "冲突"):
+            resolve_draw_options(options)
+
+    def test_all_ratio_aliases_keep_exact_ratio_and_aligned_dimensions(self):
+        for alias, ratio in image2_draw.ASPECT_RATIO_ALIASES.items():
+            for resolution in ("1K", "2K", "4K"):
+                with self.subTest(alias=alias, resolution=resolution):
+                    prompt, options = parse_draw_options(f"城市 {alias} {resolution}")
+                    resolved = resolve_draw_options(options)
+                    width, height = map(int, resolved.size.split("x"))
+                    rw, rh = map(int, ratio.split(":"))
+                    self.assertEqual(prompt, "城市")
+                    self.assertEqual(width * rh, height * rw)
+                    self.assertEqual(width % 16, 0)
+                    self.assertEqual(height % 16, 0)
+                    self.assertLessEqual(max(width, height), int(resolution[:-1]) * 1024)
+
+    def test_shorthands_quotes_and_aliases(self):
+        for suffix in ("--916 --size 2k", "--ratio=9:16 --resolution=2K", "916 2K"):
+            with self.subTest(suffix=suffix):
+                _, options = parse_draw_options(f"海边 {suffix}")
+                self.assertEqual(resolve_draw_options(options).size, "1152x2048")
+        prompt, options = parse_draw_options("海边 --style '柔和 水彩' --negative \"字 水印\"")
+        self.assertEqual(prompt, "海边")
+        self.assertEqual(options.style, "柔和 水彩")
+        self.assertEqual(options.negative_prompt, "字 水印")
+
+    def test_plain_prompt_and_literal_escape_are_preserved(self):
+        for prompt in ("画一张 don't panic 海报", '写上 "--ar 916" 这段文字', "第一行\n第二行"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(parse_draw_options(prompt), (prompt, image2_draw.DrawOptions()))
+        self.assertEqual(
+            parse_draw_options("-- 画号码 11 --style 这也是原文"),
+            ("画号码 11 --style 这也是原文", image2_draw.DrawOptions()),
+        )
+
+    def test_invalid_or_duplicate_flags_report_before_any_request(self):
+        for suffix in (
+            "--ar", "--ar --size 2K", "--style ''", "--style \"未闭合",
+            "--unknown 1", "--ar 916 --ratio 916", "--size 2K stray",
+            "--quality=", "--style '   '", "--no-optimize=yes",
+        ):
+            with self.subTest(suffix=suffix), self.assertRaises(DrawError):
+                parse_draw_options("城市 " + suffix)
+
+    def test_invalid_values_and_custom_size_limits(self):
+        for suffix in (
+            "--ar 5:4", "--size 0x1024", "--size 255x1024", "--size 9000x1024",
+            "--size 8K", "--quality best",
+        ):
+            with self.subTest(suffix=suffix), self.assertRaises(DrawError):
+                _, options = parse_draw_options("城市 " + suffix)
+                resolve_draw_options(options)
+
+    def test_ratio_uses_configured_resolution_and_explicit_size_overrides_it(self):
+        _, options = parse_draw_options("城市 916")
+        self.assertEqual(resolve_draw_options(options, "4K").size, "2304x4096")
+        _, options = parse_draw_options("城市 --size 1080x1920 --ar 916")
+        self.assertEqual(resolve_draw_options(options, "4K").size, "1080x1920")
+        _, options = parse_draw_options("城市")
+        self.assertEqual(resolve_draw_options(options, "1080x1920").size, "1080x1920")
+        _, options = parse_draw_options("城市 43")
+        self.assertEqual(resolve_draw_options(options, "1080x1920").size, "1920x1440")
+
+    def test_style_and_negative_do_not_inject_square_dimensions(self):
+        _, options = parse_draw_options("改成夜景 --style 水彩 --negative 水印")
+        prompt = image2_draw.apply_draw_options(
+            "改成夜景", resolve_draw_options(options), include_size=False
+        )
+        self.assertIn("水彩", prompt)
+        self.assertIn("水印", prompt)
+        self.assertNotIn("尺寸", prompt)
+
 
 class RequestTests(unittest.TestCase):
     def test_builds_text_request(self):
@@ -165,6 +265,17 @@ class RequestTests(unittest.TestCase):
                     resolution,
                 )
                 self.assertEqual(payload["size"], expected_size)
+
+    def test_builds_custom_size_and_quality(self):
+        payload = build_openai_images_request(
+            "gpt-image-2",
+            "测试",
+            "4K",
+            image_size="1152x2048",
+            quality="high",
+        )
+        self.assertEqual(payload["size"], "1152x2048")
+        self.assertEqual(payload["quality"], "high")
 
     def test_optimizer_does_not_restrict_model_vendor(self):
         payload = build_optimizer_request("deepseek-chat", "画一只猫")
@@ -433,6 +544,91 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class OptionDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def call_draw(self, prompt, *, protocol="openai_images", image_ref=None, **kwargs):
+        client = Image2DrawClient(
+            api_url="https://example.com/generate",
+            edit_api_url="https://example.com/edit",
+            api_key="test-key",
+            model="image-model",
+            draw_protocol=protocol,
+            **kwargs,
+        )
+        encoded = base64.b64encode(PNG_BYTES).decode("ascii")
+        session = _PostSession([_PostResponse(200, json.dumps({"data": [{"b64_json": encoded}]}))])
+        stub = types.SimpleNamespace(
+            ClientTimeout=lambda **kw: object(), ClientSession=lambda **kw: session,
+            FormData=_FormData,
+        )
+        with (
+            patch.object(image2_draw, "aiohttp", stub),
+            patch.object(client, "_load_image_data_url", AsyncMock(return_value=f"data:image/png;base64,{encoded}")),
+            patch.object(client, "_optimize_prompt", AsyncMock(return_value="优化完成")) as optimizer,
+        ):
+            output, final_prompt = await client.draw(prompt, image_ref)
+        self.assertEqual(output.kind, "base64")
+        return session.requests[0], final_prompt, optimizer
+
+    async def test_generation_uses_size_quality_and_post_optimization_constraints(self):
+        request, prompt, optimizer = await self.call_draw(
+            '海边 --ar 916 --size 2K --quality high --style 水彩 --negative "文字 水印"',
+            optimize_prompt=True, optimizer_api_url="https://example.com/chat", optimizer_model="text",
+        )
+        payload = request[1]["json"]
+        self.assertEqual(payload["size"], "1152x2048")
+        self.assertEqual(payload["quality"], "high")
+        self.assertIn("9:16", payload["prompt"])
+        self.assertIn("文字 水印", prompt)
+        self.assertIn("水彩", prompt)
+        self.assertNotIn("--ar", prompt)
+        optimizer.assert_awaited_once()
+        self.assertEqual(optimizer.call_args.args[1], "海边")
+
+    async def test_edit_has_explicit_size_and_quality_in_form(self):
+        request, _, _ = await self.call_draw(
+            "换背景 --ar 916 --size 2K --quality low", image_ref="ref.png"
+        )
+        self.assertEqual(request[0], "https://example.com/edit")
+        fields = {name: value for name, value, _ in request[1]["data"].fields}
+        self.assertEqual(fields["size"], "1152x2048")
+        self.assertEqual(fields["quality"], "low")
+        self.assertEqual(fields["image"], PNG_BYTES)
+
+    async def test_edit_style_alone_preserves_automatic_size(self):
+        request, prompt, _ = await self.call_draw("换背景 --style 水彩", image_ref="ref.png")
+        fields = {name: value for name, value, _ in request[1]["data"].fields}
+        self.assertNotIn("size", fields)
+        self.assertNotIn("quality", fields)
+        self.assertNotIn("4096", prompt)
+        self.assertIn("水彩", prompt)
+
+    async def test_chat_keeps_standard_request_and_adds_text_constraints(self):
+        request, prompt, _ = await self.call_draw(
+            "海边 --ar 916 --size 2K --quality high", protocol="openai_chat"
+        )
+        self.assertEqual(set(request[1]["json"]), {"model", "messages"})
+        self.assertEqual(request[1]["json"]["messages"][0]["content"], prompt)
+        self.assertIn("1152x2048", prompt)
+        self.assertIn("high", prompt)
+
+    async def test_no_optimize_works_without_optimizer_credentials(self):
+        request, prompt, optimizer = await self.call_draw(
+            "海边 --no-optimize", optimize_prompt=True
+        )
+        optimizer.assert_not_awaited()
+        self.assertEqual(prompt, "海边")
+        self.assertEqual(request[1]["json"]["prompt"], "海边")
+
+    async def test_configured_custom_size_is_sent(self):
+        request, _, _ = await self.call_draw("海边", image_resolution="1080x1920")
+        self.assertEqual(request[1]["json"]["size"], "1080x1920")
+
+    async def test_preview_cannot_accidentally_make_api_request(self):
+        client = Image2DrawClient(api_url="", api_key="", model="")
+        with self.assertRaisesRegex(DrawError, "预览"):
+            await client.draw("海边 --preview")
+
+
 class ConfigTests(unittest.TestCase):
     def test_optimizer_requires_complete_config(self):
         client = Image2DrawClient(
@@ -580,7 +776,7 @@ class ConfigTests(unittest.TestCase):
             draw_protocol="openai_images",
             image_resolution="8K",
         )
-        with self.assertRaisesRegex(DrawError, "图片清晰度"):
+        with self.assertRaisesRegex(DrawError, "清晰度"):
             client.validate_config()
 
     def test_rejects_unknown_draw_protocol(self):
@@ -601,6 +797,14 @@ class ConfigTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(DrawError, "地址格式不正确"):
             client.validate_config()
+
+    def test_parameters_do_not_hide_a_short_prompt_from_optimizer_validation(self):
+        client = Image2DrawClient(
+            api_url="https://example.com/generate", api_key="test-key", model="image",
+            optimize_prompt=True,
+        )
+        with self.assertRaisesRegex(DrawError, "优化接口"):
+            client.validate_config("海边 --negative \"" + "水印" * 60 + "\"")
 
 
 class RetryTests(unittest.IsolatedAsyncioTestCase):

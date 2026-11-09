@@ -5,7 +5,9 @@ import base64
 import binascii
 import html
 import json
+import math
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -35,6 +37,47 @@ IMAGE_RESOLUTION_SIZES = {
     "2K": "2048x2048",
     "4K": "4096x4096",
 }
+ASPECT_RATIO_ALIASES = {
+    "11": "1:1",
+    "1:1": "1:1",
+    "43": "4:3",
+    "4:3": "4:3",
+    "34": "3:4",
+    "3:4": "3:4",
+    "169": "16:9",
+    "16:9": "16:9",
+    "916": "9:16",
+    "9:16": "9:16",
+    "32": "3:2",
+    "3:2": "3:2",
+    "23": "2:3",
+    "2:3": "2:3",
+    "219": "21:9",
+    "21:9": "21:9",
+}
+SUPPORTED_ASPECT_RATIOS = tuple(dict.fromkeys(ASPECT_RATIO_ALIASES.values()))
+SUPPORTED_QUALITIES = {"auto", "low", "medium", "high"}
+CUSTOM_SIZE_PATTERN = re.compile(r"^(\d{2,5})\s*[xX×]\s*(\d{2,5})$")
+
+
+@dataclass(frozen=True)
+class DrawOptions:
+    aspect_ratio: str | None = None
+    size: str | None = None
+    quality: str | None = None
+    negative_prompt: str | None = None
+    style: str | None = None
+    no_optimize: bool = False
+    preview: bool = False
+
+
+@dataclass(frozen=True)
+class ResolvedDrawOptions:
+    aspect_ratio: str
+    size: str
+    quality: str | None = None
+    negative_prompt: str | None = None
+    style: str | None = None
 
 
 class DrawError(Exception):
@@ -49,6 +92,7 @@ class ImageOutput:
 
 def extract_draw_prompt(message: str | None) -> str:
     text = (message or "").strip()
+    text = re.sub(r"^(?:\[CQ:at,[^\]]+\]|@\S+)\s*", "", text)
     match = re.match(r"^[／/]?draw(?:\s+|$)(.*)$", text, re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(1).strip()
@@ -61,6 +105,184 @@ def extract_youhua_prompt(message: str | None) -> str:
     if match:
         return match.group(1).strip()
     return text
+
+
+def parse_draw_options(prompt: str | None) -> tuple[str, DrawOptions]:
+    text = (prompt or "").strip()
+    # A leading -- keeps literal prompts (including numbers and option-like text).
+    if text.startswith("-- "):
+        return text[3:].strip(), DrawOptions()
+    values: dict[str, Any] = {}
+    aliases = {
+        "--ar": "aspect_ratio",
+        "--ratio": "aspect_ratio",
+        "--aspect": "aspect_ratio",
+        "--size": "size",
+        "--resolution": "size",
+        "--quality": "quality",
+        "--negative": "negative_prompt",
+        "--style": "style",
+    }
+
+    def add(key: str, value: Any) -> None:
+        if key in values:
+            raise DrawError("同一个参数不能重复填写；查看 /draw --help。")
+        values[key] = value
+
+    # Scan only the option suffix; quotes/apostrophes in ordinary prompts are preserved.
+    option_start = next(
+        (
+            match.start()
+            for match in re.finditer(
+                r"""(?<!\S)(?:"[^"]*"|'[^']*')|(?<!\S)--\S+""", text
+            )
+            if match.group().startswith("--")
+        ),
+        None,
+    )
+    if option_start is not None:
+        try:
+            tokens = shlex.split(text[option_start:])
+        except ValueError as exc:
+            raise DrawError('参数引号没有闭合；例如 --style "柔和 水彩"。') from exc
+        text = text[:option_start].rstrip()
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            flag, separator, value = token.partition("=")
+            flag = flag.lower()
+            if flag in {"--no-optimize", "--preview"} and not separator:
+                add("no_optimize" if flag == "--no-optimize" else "preview", True)
+            elif flag.startswith("--") and flag[2:] in ASPECT_RATIO_ALIASES and not separator:
+                add("aspect_ratio", flag[2:])
+            elif flag in aliases:
+                if not separator:
+                    index += 1
+                    value = tokens[index] if index < len(tokens) else ""
+                if not value.strip() or value.startswith("--"):
+                    raise DrawError(f"{flag} 缺少值；查看 /draw --help。")
+                add(aliases[flag], value)
+            else:
+                raise DrawError(
+                    f"无法识别后缀参数 {flag}；查看 /draw --help，多字参数请用引号包住。"
+                )
+            index += 1
+
+    # Convenient suffixes: "提示词 916 2K" or "提示词 1536x2048".
+    while text:
+        parts = text.rsplit(maxsplit=1)
+        if len(parts) != 2:
+            break
+        value = parts[1]
+        if value in ASPECT_RATIO_ALIASES:
+            add("aspect_ratio", value)
+        elif value.upper() in IMAGE_RESOLUTION_SIZES or CUSTOM_SIZE_PATTERN.fullmatch(value):
+            add("size", value)
+        else:
+            break
+        text = parts[0].rstrip()
+    return text, DrawOptions(**values)
+
+
+def resolve_draw_options(
+    options: DrawOptions,
+    default_resolution: str = "4K",
+) -> ResolvedDrawOptions:
+    ratio = _normalize_aspect_ratio(options.aspect_ratio or "1:1")
+    requested_size = (options.size or default_resolution or "4K").strip().upper()
+    custom_size = _parse_custom_size(requested_size)
+
+    if custom_size:
+        width, height = custom_size
+        if options.aspect_ratio and not options.size:
+            width, height = _dimensions_for_ratio(ratio, max(width, height))
+        elif options.aspect_ratio and not _same_aspect_ratio(width, height, ratio):
+            raise DrawError(
+                f"尺寸 {width}x{height} 与比例 {ratio} 冲突；"
+                "请去掉 --ar 使用自定义宽高，或改用 --ar 9:16 --size 2K（1152x2048）。"
+            )
+        resolved_ratio = ratio if options.aspect_ratio else _ratio_from_dimensions(width, height)
+        size = f"{width}x{height}"
+    else:
+        if requested_size not in IMAGE_RESOLUTION_SIZES:
+            raise DrawError(
+                "清晰度只能填写 1K、2K、4K，或自定义像素尺寸，例如 1536x2048。"
+            )
+        long_edge = int(requested_size[:-1]) * 1024
+        width, height = _dimensions_for_ratio(ratio, long_edge)
+        resolved_ratio = ratio
+        size = f"{width}x{height}"
+    if min(width, height) < 256:
+        raise DrawError("换算后的短边小于 256 像素，请提高 --size 分辨率。")
+
+    quality = (options.quality or "").strip().lower() or None
+    if quality and quality not in SUPPORTED_QUALITIES:
+        raise DrawError("质量只能填写 auto、low、medium 或 high。")
+
+    return ResolvedDrawOptions(
+        aspect_ratio=resolved_ratio,
+        size=size,
+        quality=quality,
+        negative_prompt=(options.negative_prompt or "").strip() or None,
+        style=(options.style or "").strip() or None,
+    )
+
+
+def apply_draw_options(
+    prompt: str, options: ResolvedDrawOptions, *, include_size: bool = True
+) -> str:
+    additions = []
+    if include_size:
+        additions.append(f"画面比例为 {options.aspect_ratio}，目标尺寸为 {options.size}。")
+    if options.quality:
+        additions.append(f"输出质量偏好：{options.quality}。")
+    if options.style:
+        additions.append(f"整体风格：{options.style}。")
+    if options.negative_prompt:
+        additions.append(f"避免出现：{options.negative_prompt}。")
+    return f"{prompt.strip()}\n\n" + " ".join(additions) if additions else prompt
+
+
+DRAW_HELP = """用法：/draw <提示词> [后缀参数]
+例：/draw 海边城市 --ar 9:16 --size 2K
+简写：/draw 海边城市 916 2K
+只写比例：/draw 海边城市 916（沿用 WebUI 清晰度）
+自定义像素：/draw 海边城市 --size 1080x1920
+比例：11/43/34/169/916/32/23/219，也可写 1:1/4:3/3:4/16:9/9:16/3:2/2:3/21:9。
+--ar/--ratio：比例；--size/--resolution：1K、2K、4K 或 宽x高。
+预设清晰度按长边计算，保持精确比例并向下对齐到 16 像素；自定义宽高为 256～8192。
+--quality high：质量，可选 auto/low/medium/high（Images 需要模型支持）。
+--style "柔和 水彩"：风格；--negative "文字 水印"：希望避免的内容。
+--no-optimize：本次跳过额外提示词优化。
+--preview：只预览参数，不调用接口、不扣次数；删掉它后才会绘图。
+参数放在末尾，多字值请用引号；/draw -- 原文 可保留末尾数字和 -- 字样。
+可同消息附图或回复图片改图；显式指定尺寸时也会传给编辑接口。
+Images 会传 size/quality；Chat 只追加文字约束。能否支持、最终比例是否一致取决于上游模型；报尺寸错误请换服务商支持的宽高。"""
+
+
+def format_draw_options_notice(
+    options: DrawOptions, resolved: ResolvedDrawOptions, protocol: str
+) -> str:
+    details = []
+    if options.aspect_ratio or options.size:
+        details.append(f"比例 {resolved.aspect_ratio}，请求尺寸 {resolved.size}")
+    if options.quality:
+        details.append(f"质量 {resolved.quality}")
+    if options.style:
+        details.append("已附加风格要求")
+    if options.negative_prompt:
+        details.append("已附加避免内容")
+    if options.no_optimize:
+        details.append("本次跳过提示词优化")
+    if not details:
+        return ""
+    message = "\n" + "；".join(details)
+    if options.aspect_ratio or options.size or options.quality:
+        if protocol == DRAW_PROTOCOL_OPENAI_CHAT:
+            message += "\nChat 协议按文字要求绘图，尺寸和比例不保证严格生效。"
+        else:
+            message += "\nImages 将传递这些参数，尺寸和质量需上游模型支持。"
+    return message
 
 
 def build_draw_request(
@@ -89,13 +311,18 @@ def build_openai_images_request(
     model: str,
     prompt: str,
     image_resolution: str,
+    image_size: str | None = None,
+    quality: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "model": model,
         "prompt": prompt,
-        "size": IMAGE_RESOLUTION_SIZES[image_resolution],
+        "size": image_size or IMAGE_RESOLUTION_SIZES[image_resolution],
         "response_format": "b64_json",
     }
+    if quality:
+        payload["quality"] = quality
+    return payload
 
 
 def build_optimizer_request(model: str, prompt: str) -> dict[str, Any]:
@@ -216,32 +443,52 @@ class Image2DrawClient:
         prompt: str,
         image_ref: str | None = None,
     ) -> tuple[ImageOutput, str]:
+        clean_prompt, draw_options = parse_draw_options(prompt)
+        if draw_options.preview:
+            raise DrawError("这是参数预览；实际绘图请去掉 --preview。")
+        resolved_options = resolve_draw_options(
+            draw_options,
+            self.image_resolution,
+        )
         self.validate_config(prompt, bool(image_ref))
         if aiohttp is None:
             raise DrawError("运行环境缺少 aiohttp，无法调用绘图接口。")
 
         timeout = aiohttp.ClientTimeout(total=self.request_timeout_seconds)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            final_prompt = prompt
-            if self._should_optimize_prompt(prompt):
-                final_prompt = await self._optimize_prompt(session, prompt)
+            final_prompt = clean_prompt
+            if not draw_options.no_optimize and self._should_optimize_prompt(clean_prompt):
+                final_prompt = await self._optimize_prompt(session, clean_prompt)
+            final_prompt = apply_draw_options(
+                final_prompt,
+                resolved_options,
+                include_size=bool(draw_options.aspect_ratio or draw_options.size),
+            )
 
             if self.draw_protocol == DRAW_PROTOCOL_OPENAI_IMAGES:
                 if image_ref:
                     image_data_url = await self._load_image_data_url(
                         session, image_ref
                     )
+                    edit_options = {}
+                    if draw_options.aspect_ratio or draw_options.size:
+                        edit_options["image_size"] = resolved_options.size
+                    if resolved_options.quality:
+                        edit_options["quality"] = resolved_options.quality
                     response = await self._post_image_edit(
                         session,
                         self.edit_api_url,
                         image_data_url,
                         final_prompt,
+                        **edit_options,
                     )
                 else:
                     payload = build_openai_images_request(
                         self.model,
                         final_prompt,
                         self.image_resolution,
+                        image_size=resolved_options.size,
+                        quality=resolved_options.quality,
                     )
                     response = await self._post_json(
                         session,
@@ -285,6 +532,13 @@ class Image2DrawClient:
         prompt: str | None = None,
         has_reference_image: bool = False,
     ) -> None:
+        options = DrawOptions()
+        clean_prompt = prompt
+        if prompt is not None:
+            clean_prompt, options = parse_draw_options(prompt)
+            if not clean_prompt:
+                raise DrawError("请先写绘图内容，再加后缀参数；查看 /draw --help。")
+        resolve_draw_options(options, self.image_resolution)
         if not self.api_url:
             raise DrawError("请先在 WebUI 中填写绘图 API 地址。")
         _validate_api_url(self.api_url, "绘图 API")
@@ -295,8 +549,6 @@ class Image2DrawClient:
         if self.draw_protocol not in SUPPORTED_DRAW_PROTOCOLS:
             raise DrawError("绘图接口协议只支持 openai_chat 或 openai_images。")
         if self.draw_protocol == DRAW_PROTOCOL_OPENAI_IMAGES:
-            if self.image_resolution not in IMAGE_RESOLUTION_SIZES:
-                raise DrawError("图片清晰度只支持 1K、2K 或 4K。")
             if has_reference_image:
                 if not self.edit_api_url:
                     raise DrawError(
@@ -311,8 +563,8 @@ class Image2DrawClient:
             )
         if self.optimizer_max_prompt_length < 0:
             raise DrawError("提示词优化最大长度不能小于 0。")
-        should_validate_optimizer = self.optimize_prompt_enabled and (
-            prompt is None or self._should_optimize_prompt(prompt)
+        should_validate_optimizer = not options.no_optimize and self.optimize_prompt_enabled and (
+            clean_prompt is None or self._should_optimize_prompt(clean_prompt)
         )
         if should_validate_optimizer:
             self.validate_optimizer_config()
@@ -409,6 +661,9 @@ class Image2DrawClient:
         url: str,
         image_data_url: str,
         prompt: str,
+        *,
+        image_size: str | None = None,
+        quality: str | None = None,
     ) -> dict[str, Any]:
         mime, data = _decode_image_data_url(image_data_url)
         if mime == "image/gif":
@@ -425,6 +680,10 @@ class Image2DrawClient:
             form.add_field("prompt", prompt)
             form.add_field("n", "1")
             form.add_field("response_format", "b64_json")
+            if image_size:
+                form.add_field("size", image_size)
+            if quality:
+                form.add_field("quality", quality)
             form.add_field(
                 "image",
                 data,
@@ -547,6 +806,46 @@ def _validate_api_url(url: str, label: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise DrawError(f"{label}地址格式不正确。")
+
+
+def _normalize_aspect_ratio(value: str) -> str:
+    key = re.sub(r"\s+", "", str(value or "")).lower()
+    ratio = ASPECT_RATIO_ALIASES.get(key)
+    if ratio:
+        return ratio
+    supported = "、".join(SUPPORTED_ASPECT_RATIOS)
+    raise DrawError(f"比例不支持：{value}。可用比例：{supported}。")
+
+
+def _parse_custom_size(value: str) -> tuple[int, int] | None:
+    match = CUSTOM_SIZE_PATTERN.fullmatch(value)
+    if not match:
+        return None
+    width, height = (int(match.group(index)) for index in (1, 2))
+    if not 256 <= width <= 8192 or not 256 <= height <= 8192:
+        raise DrawError("自定义尺寸的宽高需要在 256 到 8192 像素之间。")
+    return width, height
+
+
+def _same_aspect_ratio(width: int, height: int, ratio: str) -> bool:
+    ratio_width, ratio_height = (int(part) for part in ratio.split(":"))
+    return width * ratio_height == height * ratio_width
+
+
+def _ratio_from_dimensions(width: int, height: int) -> str:
+    divisor = math.gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
+def _dimensions_for_ratio(ratio: str, long_edge: int) -> tuple[int, int]:
+    ratio_width, ratio_height = (int(part) for part in ratio.split(":"))
+    divisor = math.gcd(ratio_width, ratio_height)
+    ratio_width, ratio_height = ratio_width // divisor, ratio_height // divisor
+    largest_part = max(ratio_width, ratio_height)
+    unit = (long_edge // (largest_part * 16)) * 16
+    if unit < 1:
+        raise DrawError(f"清晰度太低，无法生成比例 {ratio} 的有效尺寸。")
+    return ratio_width * unit, ratio_height * unit
 
 
 def _find_image_output(value: Any) -> ImageOutput | None:

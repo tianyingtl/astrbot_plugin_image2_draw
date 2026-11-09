@@ -206,6 +206,43 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results, [])
         self.assertFalse(event.stopped)
 
+    async def test_help_and_preview_do_not_call_api_or_charge(self):
+        for text in ("/draw --help", "/draw 海边 916 2K --preview"):
+            with self.subTest(text=text), patch.object(main, "_create_client") as create:
+                event = _Event(text)
+                results = await _collect(self.plugin.on_message(event))
+                create.assert_not_called()
+                self.assertEqual(len(results), 1)
+                self.assertTrue(event.stopped)
+                self.assertFalse(self.plugin.usage_store.path.exists())
+                if "--preview" in text:
+                    self.assertIn("1152x2048", results[0].value)
+                    self.assertIn("未调用接口", results[0].value)
+                else:
+                    self.assertIn("--ar", results[0].value)
+
+    async def test_invalid_suffix_does_not_start_or_charge(self):
+        for text in ("/draw 海边 --ar 5:4", "/draw --size 2K", "/draw 海边 --style"):
+            with self.subTest(text=text), patch.object(main, "_create_client") as create:
+                results = await _collect(self.plugin.on_message(_Event(text)))
+                create.assert_not_called()
+                self.assertEqual(len(results), 1)
+                self.assertIn("绘图失败", results[0].value)
+                self.assertFalse(self.plugin.usage_store.path.exists())
+
+    async def test_suffix_works_with_mention_and_tool_and_reports_actual_size(self):
+        client = _SuccessfulClient()
+        client.draw = AsyncMock(return_value=(ImageOutput("url", "https://example.com/a.png"), ""))
+        event = _Event("@机器人 /draw 海边 916 2K")
+        with patch.object(main, "_create_client", return_value=client):
+            results = await _collect(self.plugin.on_message(event))
+            self.assertIn("1152x2048", results[0].value)
+            client.draw.assert_awaited_once_with("海边 916 2K", None)
+            # The tool shares command quotas instead of bypassing them.
+            blocked = await _collect(self.plugin.image2_draw(_Event("画海边"), "海边 --ar 916"))
+            self.assertIn("次数已用完", blocked[0].value)
+            self.assertEqual(client.draw.await_count, 1)
+
     async def test_llm_tool_draws_with_the_model_generated_prompt(self):
         event = _Event("@机器人 画一只猫", group_id="99999")
         client = _SuccessfulClient()

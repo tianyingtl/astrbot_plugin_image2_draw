@@ -35,15 +35,10 @@
     "hint": "填写绘图接口实际提供的模型名。"
   },
   "image_resolution": {
-    "description": "图片清晰度",
+    "description": "默认图片分辨率",
     "type": "string",
     "default": "4K",
-    "options": [
-      "1K",
-      "2K",
-      "4K"
-    ],
-    "hint": "默认 4K，仅用于无参考图的文字生图：1K=1024x1024、2K=2048x2048、4K=4096x4096。参考图编辑由模型自动选择兼容尺寸，避免服务商因不支持指定尺寸而返回 400。"
+    "hint": "可填 1K/2K/4K 或自定义宽x高（如 1080x1920，每边 256～8192）。预设按长边计算，带比例时保持精确比例并向下对齐到16像素。指令后缀 --ar 9:16 --size 2K 可覆盖本次设置；/draw --help 看完整参考，--preview 免费预览。Images 需服务商支持该尺寸；Chat 仅追加文字要求。未指定后缀时参考图编辑不传 size。"
   },
   "request_timeout_seconds": {
     "description": "最大等待时间（秒）",
@@ -79,7 +74,7 @@
     "description": "启用提示词优化",
     "type": "bool",
     "default": false,
-    "hint": "只控制 /draw 的自动优化；/youhua 会始终调用优化接口。"
+    "hint": "控制绘图前的自动优化；后缀 --no-optimize 可仅本次跳过，比例/尺寸等后缀不参与优化。/youhua 会始终调用优化接口。"
   },
   "optimizer_max_prompt_length": {
     "description": "提示词优化最大长度（字）",

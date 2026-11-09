@@ -14,17 +14,25 @@ from astrbot.core.utils.quoted_message_parser import extract_quoted_message_imag
 
 try:
     from .image2_draw import (
+        DRAW_HELP,
         DrawError,
         Image2DrawClient,
         extract_draw_prompt,
         extract_youhua_prompt,
+        format_draw_options_notice,
+        parse_draw_options,
+        resolve_draw_options,
     )
 except ImportError:
     from image2_draw import (
+        DRAW_HELP,
         DrawError,
         Image2DrawClient,
         extract_draw_prompt,
         extract_youhua_prompt,
+        format_draw_options_notice,
+        parse_draw_options,
+        resolve_draw_options,
     )
 
 
@@ -111,6 +119,9 @@ class Image2DrawPlugin(Star):
 
         当用户明确要求画图、生成图片或修改图片时调用。先理解用户的要求，
         自行整理成完整、具体的绘图提示词；当前消息附带或引用的图片会自动作为参考图。
+        用户指定比例/尺寸时在提示词末尾附加 --ar 9:16 --size 2K，支持比例
+        1:1、4:3、3:4、16:9、9:16、3:2、2:3、21:9；尺寸也可写 1080x1920。
+        可用 --style "水彩"、--negative "文字 水印"、--quality high、--no-optimize。
 
         Args:
             prompt(string): 根据用户要求整理出的完整绘图或改图提示词。
@@ -129,6 +140,16 @@ class Image2DrawPlugin(Star):
         *,
         stop_event: bool = True,
     ):
+        prompt = (
+            prompt_override
+            if prompt_override is not None
+            else extract_draw_prompt(getattr(event, "message_str", ""))
+        )
+        if not prompt or prompt.strip().lower() in {"--help", "-h", "帮助"}:
+            yield event.plain_result(DRAW_HELP)
+            if stop_event:
+                event.stop_event()
+            return
         if not self._draw_group_allowed(event):
             yield _reply_to_command_message(
                 event,
@@ -138,23 +159,34 @@ class Image2DrawPlugin(Star):
                 event.stop_event()
             return
 
-        prompt = (
-            prompt_override
-            if prompt_override is not None
-            else extract_draw_prompt(getattr(event, "message_str", ""))
-        )
-        if not prompt:
-            yield event.plain_result(
-                "用法：/draw <提示词>。可以在同一条消息附图，或回复一张图片后发送指令。"
-            )
-            if stop_event:
-                event.stop_event()
-            return
-
-        client = _create_client(self.config)
-
         reserved_sender_id = ""
         try:
+            clean_prompt, draw_options = parse_draw_options(prompt)
+            resolved_options = resolve_draw_options(
+                draw_options, _config_text(self.config, "image_resolution") or "4K"
+            )
+            if not clean_prompt:
+                raise DrawError("请先写绘图内容，再加后缀参数；查看 /draw --help。")
+            if draw_options.preview:
+                protocol = _config_text(self.config, "image_api_protocol") or "openai_chat"
+                details = format_draw_options_notice(draw_options, resolved_options, protocol)
+                if not (draw_options.aspect_ratio or draw_options.size):
+                    details = (
+                        "\n未指定尺寸：Images 文字生图使用 "
+                        f"{resolved_options.size}，Chat 和参考图编辑由模型决定。"
+                    ) + details
+                yield _reply_to_command_message(
+                    event,
+                    event.plain_result(
+                        "参数预览（未调用接口、不扣次数）"
+                        + details
+                        + f"\n绘图内容：{clean_prompt}\n确认后去掉 --preview 再发送。"
+                    ),
+                )
+                if stop_event:
+                    event.stop_event()
+                return
+            client = _create_client(self.config)
             image_ref = await _find_reference_image(event)
             client.validate_config(prompt, bool(image_ref))
 
@@ -181,7 +213,12 @@ class Image2DrawPlugin(Star):
                     return
                 reserved_sender_id = sender_id
 
-            yield event.plain_result("开始绘画喵")
+            notice = format_draw_options_notice(
+                draw_options,
+                resolved_options,
+                _config_text(self.config, "image_api_protocol") or "openai_chat",
+            )
+            yield event.plain_result("开始绘画喵" + notice)
             output, _ = await client.draw(prompt, image_ref)
         except DrawError as exc:
             if reserved_sender_id:
